@@ -1,0 +1,109 @@
+{
+  "entries": [
+    {
+      "id": "filesystem",
+      "title": "Filesystem",
+      "description": "Чтение и запись файлов только в указанных папках. Доступ ограничен теми путями, которые вы передали.",
+      "repo": "https://github.com/modelcontextprotocol/servers",
+      "author": "modelcontextprotocol",
+      "source": "official",
+      "install": {
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/путь/к/папке"],
+        "note": "Замените путь на нужную папку. Не указывайте корень диска."
+      }
+    },
+    {
+      "id": "memory",
+      "title": "Memory",
+      "description": "Постоянная память на графе знаний: сущности, связи и наблюдения между сессиями.",
+      "repo": "https://github.com/modelcontextprotocol/servers",
+      "author": "modelcontextprotocol",
+      "source": "official",
+      "install": {
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-memory"]
+      }
+    },
+    {
+      "id": "git",
+      "title": "Git",
+      "description": "Чтение, поиск и просмотр истории git-репозиториев.",
+      "repo": "https://github.com/modelcontextprotocol/servers",
+      "author": "modelcontextprotocol",
+      "source": "official",
+      "install": {
+        "transport": "stdio",
+        "command": "uvx",
+        "args": ["mcp-server-git"],
+        "note": "Нужен uv (команда uvx)."
+      }
+    },
+    {
+      "id": "fetch",
+      "title": "Fetch",
+      "description": "Загрузка веб-страницы и перевод её в текст для модели.",
+      "repo": "https://github.com/modelcontextprotocol/servers",
+      "author": "modelcontextprotocol",
+      "source": "official",
+      "install": {
+        "transport": "stdio",
+        "command": "uvx",
+        "args": ["mcp-server-fetch"],
+        "note": "Команду взята из документации, проверьте по README репозитория."
+      }
+    },
+    {
+      "id": "time",
+      "title": "Time",
+      "description": "Текущее время и перевод времени между часовыми поясами.",
+      "repo": "https://github.com/modelcontextprotocol/servers",
+      "author": "modelcontextprotocol",
+      "source": "official",
+      "install": {
+        "transport": "stdio",
+        "command": "uvx",
+        "args": ["mcp-server-time"],
+        "note": "Команду взята из документации, проверьте по README репозитория."
+      }
+    },
+    {
+      "id": "sequential_thinking",
+      "title": "Sequential Thinking",
+      "description": "Пошаговое решение задач с возможностью пересматривать предыдущие шаги.",
+      "repo": "https://github.com/modelcontextprotocol/servers",
+      "author": "modelcontextprotocol",
+      "source": "official",
+      "install": {
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+        "note": "Команду взята из документации, проверьте по README репозитория."
+      }
+    },
+    {
+      "id": "a2asearch",
+      "title": "A2A Search",
+      "description": "Поиск по каталогу MCP-серверов, агентов и CLI-инструментов.",
+      "repo": "https://github.com/tadas-github/a2asearch-mcp",
+      "author": "tadas-github",
+      "source": "community",
+      "install": {
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "a2asearch-mcp"],
+        "note": "Сторонний пакет. Перед запуском прочитайте репозиторий."
+      }
+    },
+    {
+      "id": "mcp_tools_catalog",
+      "title": "Awesome MCP Tools",
+      "description": "CLI и stdio-мост к каталогу из 2000+ MCP-серверов. Удобно искать серверы по ключевым словам.",
+      "repo": "https://github.com/adw0rd/awesome-mcp-tools-mcp",
+      "author": "adw0rd",
+      "source": "community"
+    }
+  ]
+}
