@@ -1,8 +1,92 @@
 # Personal AI Assistant (pai)
 
-## О проекте
+## Language / Язык
 
-PAI — персональный AI-ассистент с иерархической памятью, кастомными функциями и инструментами. 
+Select your language / Выберите ваш язык:
+- [English](#english) | [Русский](#russian)
+
+---
+
+## English
+
+### About the project
+
+PAI is a personal AI assistant with hierarchical memory, custom functions, and tools.
+
+### Main features
+
+- **Hierarchical memory** — tree structure (roots → children → leaves) with full-text search and export/import (WAL → JSONL)
+- **Personas** — different roles (tutor, work, mentor, etc.) with independent memory spaces and tool permissions
+- **Tools** — built-in (web_search, calculate_time_delta) and user-defined Python functions
+- **Self-generated rules & Skills** — behavior configurable via rules and skills
+- **API** — REST API for chat, memory, personas, tools, functions, rules, and external services
+
+### Quick start
+
+```bash
+# Install dependencies
+cd /data/data/com.termux/files/home/downloads/go_pai
+pip install -r requirements.txt
+
+# Start the server (FastAPI + Uvicorn)
+uvicorn pai.app:app --host 127.0.0.1 --port 8000
+
+# Access the UI
+# http://127.0.0.1:8000
+
+# Tests
+python -m pytest tests
+```
+
+### Environment
+
+- `PAI_DATA_DIR` — directory for data (default `./pai_data`)
+- `PAI_TIMEZONE` — timezone in IANA format (e.g. `Europe/Belgrade`; default system timezone)
+- `PAI_TAIL_LENGTH` — number of chat messages in the prompt tail (default 10)
+- `PAI_LLM_*` — LLM settings (see `pai/app.py`)
+
+### Architecture
+
+- **Memory** — SQLite with WAL mode, export/import via JSONL
+- **Orchestrator** — tool pool planning, iteration limits, error handling
+- **Tool Dispatcher** — execution of tools (built-in and user-defined) with timeouts
+- **API Layer** — FastAPI endpoints for all entities
+
+### Iterations
+
+- Iteration 1 — memory backup/restore (export/import WAL → JSONL)
+- Iteration 2 — graceful exit when tool call limit is exhausted
+- Iteration 6 — `web_search` tool (internet search via DuckDuckGo)
+- Iteration 7 — persona `tool_permissions` via API
+- Iteration 8 — pool of independent tool calls (parallel execution, planning)
+
+### User-defined functions
+
+User-defined Python functions are stored as `draft` and require owner validation and activation. Activated functions are available in tool schemas and can be called by the model. Code runs in a separate process with a timeout (default 30 sec).
+
+### API endpoints
+
+- `/chat`, `/chat/stream` — LLM chat
+- `/memory/*` — hierarchical storage (tree, roots, children, search, export/import)
+- `/personas/*` — personas, tool_permissions
+- `/tools/*` — tools (web_search, calculate_time_delta, etc.)
+- `/skills/*` — Skills (self-generated behavior)
+- `/functions/*` — custom functions
+- `/rules/*` — self-generated rules
+- `/services/*` — external services
+- `/mcp/*` — Model Context Protocol
+
+### License
+
+MIT
+
+---
+
+## Русский
+
+### О проекте
+
+PAI — персональный AI-ассистент с иерархической памятью, кастомными функциями и инструментами.
 
 ### Основные возможности
 
@@ -53,9 +137,7 @@ python -m pytest tests
 
 ### Пользовательские функции
 
-Пользовательские Python-функции хранятся как `draft` и требуют проверки и активации владельцем. 
-Активированные функции попадают в tool schemas и могут быть вызваны моделью. 
-Код запускается в отдельном процессе с таймаутом (по умолчанию 30 сек).
+Пользовательские Python-функции хранятся как `draft` и требуют проверки и активации владельцем. Активированные функции попадают в tool schemas и могут быть вызваны моделью. Код запускается в отдельном процессе с таймаутом (по умолчанию 30 сек).
 
 ### API эндпоинты
 
