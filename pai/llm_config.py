@@ -17,6 +17,13 @@ from pathlib import Path
 from typing import Optional
 
 
+def _clamp_strictness(value) -> int:
+    try:
+        return max(1, min(5, int(value)))
+    except (TypeError, ValueError):
+        return 3
+
+
 @dataclass
 class LLMConfig:
     base_url: str = ""
@@ -33,6 +40,9 @@ class LLMConfig:
     # Vision model: describes attached images for the main model. Empty = no
     # separate model; images go straight to the main model (current behavior).
     vision_model: str = ""
+    # Answer-check strictness, 1 (lenient) .. 5 (very strict). Minimum usefulness score
+    # the checker must give for an answer to pass is derived from it (see dialog.py).
+    verify_strictness: int = 3
     site_url: str = ""
     site_name: str = ""
     # Generation parameters — the ones that actually change what comes back
@@ -171,6 +181,7 @@ class LLMConfigStore:
             summarizer_model=raw.get("summarizer_model", "") or "",
             verify_model=raw.get("verify_model", "") or "",
             vision_model=raw.get("vision_model", "") or "",
+            verify_strictness=_clamp_strictness(raw.get("verify_strictness", 3)),
             site_url=raw.get("site_url", "") or "",
             site_name=raw.get("site_name", "") or "",
             temperature=temperature,

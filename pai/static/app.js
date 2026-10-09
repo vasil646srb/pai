@@ -311,6 +311,56 @@ function updatePersonaMenuLabel() {
   if (opt) sel.title = opt.textContent;
 }
 
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (_) { /* fall through to the legacy path */ }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch (_) { ok = false; }
+  ta.remove();
+  return ok;
+}
+
+function attachCopyButton(msgDiv, getText) {
+  // Re-attach on every call: a streamed message's button must read the final text.
+  msgDiv.querySelectorAll(".msg-copy").forEach((el) => el.remove());
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "msg-copy";
+  btn.title = "Копировать сообщение";
+  btn.setAttribute("aria-label", "Копировать сообщение");
+  btn.textContent = "⧉";
+  btn.addEventListener("click", async () => {
+    const ok = await copyText(getText());
+    btn.textContent = ok ? "✓" : "✗";
+    setTimeout(() => { btn.textContent = "⧉"; }, 1200);
+  });
+  msgDiv.appendChild(btn);
+}
+
+function renderQuickReplies(list) {
+  const box = document.getElementById("quickReplies");
+  box.innerHTML = "";
+  (list || []).filter(Boolean).slice(0, 2).forEach((t) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "btn sm quick-reply";
+    b.textContent = t;
+    b.addEventListener("click", () => sendChat(t));
+    box.appendChild(b);
+  });
+  box.hidden = box.children.length === 0;
+}
+
 function appendMessage(role, text, meta, attachments, reasoning) {
   const wrap = document.getElementById("chatMessages");
   const empty = wrap.querySelector(".empty-state");
@@ -358,9 +408,41 @@ function appendMessage(role, text, meta, attachments, reasoning) {
     div.appendChild(m);
   }
 
+  attachCopyButton(div, () => text);
   wrap.appendChild(div);
   wrap.scrollTop = wrap.scrollHeight;
   return div;
+}
+
+// A service run is an event, not part of the user's dialogue: rendered apart, with its source.
+function appendServiceEvent(m, persona_id) {
+  const wrap = document.getElementById("chatMessages");
+  const div = document.createElement("div");
+  div.className = "msg service-event " + (m.role === "assistant" ? "assistant" : "user");
+  const label = document.createElement("div");
+  label.className = "service-event-label";
+  const who = m.role === "assistant" ? "результат" : "задание";
+  label.textContent = `Служба «${m.origin_name || "без названия"}» · ${who}`;
+  div.appendChild(label);
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  if (m.role === "assistant") {
+    const md = document.createElement("div");
+    md.className = "md";
+    md.innerHTML = renderMarkdown(m.text || "");
+    bubble.appendChild(md);
+  } else {
+    bubble.textContent = m.text || "";
+  }
+  div.appendChild(bubble);
+  if (m.occurred_at) {
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = `${persona_id} · ${fmtTs(m.occurred_at)} · событие службы`;
+    div.appendChild(meta);
+  }
+  attachCopyButton(div, () => m.text || "");
+  wrap.appendChild(div);
 }
 
 function renderLiveToolCall(container, name, args) {
@@ -735,13 +817,15 @@ function ensureReasoningBlock(assistantDiv) {
 let chatTurnStartedAt = 0;
 let chatFirstTokenAt = null;
 
-async function sendChat() {
+async function sendChat(override) {
   if (document.getElementById("btnSend").disabled) return;  // Ctrl+Enter used to bypass the disabled button
   chatTurnStartedAt = performance.now();
   chatFirstTokenAt = null;
   const input = document.getElementById("chatInput");
-  const text = input.value.trim();
+  const fromQuick = typeof override === "string";
+  const text = (fromQuick ? override : input.value).trim();
   if (!text && !pendingAttachments.length) return;
+  renderQuickReplies([]);
   const persona_id = document.getElementById("chatPersona").value || "brain";
   const space_id = chatSpaceFor(persona_id);
   const images = pendingAttachments.slice();
@@ -749,8 +833,10 @@ async function sendChat() {
   appendMessage(
     "user", text, `${persona_id} · ${space_id} · ${new Date().toLocaleTimeString()}`, images,
   );
-  input.value = "";
-  input.style.height = "auto";
+  if (!fromQuick) {
+    input.value = "";
+    input.style.height = "auto";
+  }
   pendingAttachments = [];
   renderAttachmentPreviews();
 
@@ -768,6 +854,7 @@ async function sendChat() {
   let liveToolEls = {}; // name -> most recent open <div class="tool-call live">
   let fullText = "";
   let fullReasoning = "";
+  let finalVerification = null;
   let firstChunkAt = null;
   let lastChunkAt = null;
   let chunkCount = 0;
@@ -869,6 +956,21 @@ async function sendChat() {
           if (mdEl) mdEl.innerHTML = "";
           continue;
         }
+        if (evt.type === "check_failed") {
+          // an answer that failed the answer check never stays in the chat: keep it in reasoning
+          ensureAssistantDiv();
+          if (!reasoningBlock) {
+            reasoningBlock = ensureReasoningBlock(assistantDiv);
+            reasoningBodyEl = reasoningBlock.querySelector(".reasoning-block-body");
+          }
+          const note = `— Ответ не прошёл проверку (попытка ${evt.attempt}) —\n${evt.text}` +
+            (evt.report ? `\nОтчёт проверки: ${evt.report}` : "");
+          fullReasoning += (fullReasoning ? "\n\n" : "") + note;
+          reasoningBodyEl.textContent = fullReasoning;
+          fullText = "";
+          if (mdEl) mdEl.innerHTML = "";
+          continue;
+        }
         if (evt.type === "reasoning_delta") {
           ensureAssistantDiv();
           if (!reasoningBlock) {
@@ -918,6 +1020,7 @@ async function sendChat() {
           if (evt.turn_usage) renderChatUsage(evt.turn_usage, finalPreview, chatFirstTokenAt != null ? (chatFirstTokenAt - chatTurnStartedAt) / 1000 : null);
           if (evt.cache_status) finalCacheStatus = evt.cache_status;
           if (evt.reply) fullText = evt.reply;  // authoritative final text
+          if (evt.verification) finalVerification = evt.verification;
           if (!fullReasoning && evt.reasoning) {
             fullReasoning = evt.reasoning;
             // reasoning that never arrived as deltas: render it now (was silently dropped before)
@@ -944,6 +1047,10 @@ async function sendChat() {
       const metaEl = assistantDiv.querySelector(".meta");
       if (metaEl) metaEl.textContent = `${persona_id}${toolNote}`;
     }
+    if (assistantDiv) attachCopyButton(assistantDiv, () => fullText);
+    // quick replies: the checker's suggestions for the user's likely next message (last attempt)
+    const lastCheck = finalVerification && finalVerification.length ? finalVerification[finalVerification.length - 1] : null;
+    renderQuickReplies(lastCheck ? lastCheck.suggested_replies : []);
     // tool calls were already rendered live during the stream; nothing more to append here
     chatHistory.push({ role: "assistant", tool_trace: finalTrace });
     if (finalPreview) renderBudget(finalPreview);
@@ -1008,6 +1115,10 @@ async function loadChatHistory() {
       // level-0 nodes for the assistant to retrieve via get_fragment,
       // but they are internal state, not part of the visible dialogue.
       if (m.text && m.text.startsWith("[Skill/tool execution result]")) return;
+      if (m.origin === "service") {
+        appendServiceEvent(m, persona_id);
+        return;
+      }
       const meta = m.occurred_at ? `${persona_id} · ${fmtTs(m.occurred_at)}` : persona_id;
       appendMessage(m.role, m.text, meta, null, m.reasoning);
     });
@@ -2299,6 +2410,15 @@ const verifyModelPicker = makeModelPicker({
   head: "modelTableHeadVerify", body: "modelTableBodyVerify", manual: "llmVerifyModelManual",
   picker: "modelPickerVerify", search: "modelSearchVerify", filterPriced: "modelFilterPricedVerify",
 });
+const STRICTNESS_LABELS = {
+  1: "1 · легко", 2: "2 · мягко", 3: "3 · средне", 4: "4 · строго", 5: "5 · очень строго",
+};
+function setStrictnessLabel() {
+  const v = document.getElementById("llmVerifyStrictness").value;
+  document.getElementById("llmVerifyStrictnessLabel").textContent = STRICTNESS_LABELS[v] || v;
+}
+document.getElementById("llmVerifyStrictness").addEventListener("input", setStrictnessLabel);
+
 const visionModelPicker = makeModelPicker({
   head: "modelTableHeadVision", body: "modelTableBodyVision", manual: "llmVisionModelManual",
   picker: "modelPickerVision", search: "modelSearchVision", filterPriced: "modelFilterPricedVision",
@@ -2322,6 +2442,8 @@ async function loadLlmSettings() {
       : "";
     modelPickerState.selectedId = data.model || "";
     document.getElementById("llmModelManual").value = data.model || "";
+    document.getElementById("llmVerifyStrictness").value = data.verify_strictness ?? 3;
+    setStrictnessLabel();
     visionModelPicker.state.selectedId = data.vision_model || "";
     document.getElementById("llmVisionModelManual").value = data.vision_model || "";
     verifyModelPicker.state.selectedId = data.verify_model || "";
@@ -2477,6 +2599,7 @@ document.getElementById("btnSaveLlmSettings").addEventListener("click", async ()
       summarizer_model: document.getElementById("llmSummarizerModelManual").value.trim(),
       verify_model: document.getElementById("llmVerifyModelManual").value.trim(),
       vision_model: document.getElementById("llmVisionModelManual").value.trim(),
+      verify_strictness: Number(document.getElementById("llmVerifyStrictness").value),
       site_url: document.getElementById("llmSiteUrl").value.trim(),
       site_name: document.getElementById("llmSiteName").value.trim(),
       reasoning_enabled: document.getElementById("llmReasoningEnabled").checked,
@@ -2517,6 +2640,8 @@ document.getElementById("btnSaveLlmSettings").addEventListener("click", async ()
       ? ""
       : `пусто = как для суммаризации (сейчас: ${data.effective_verify_model || "—"})`;
     document.getElementById("llmVisionModelManual").value = data.vision_model || "";
+    document.getElementById("llmVerifyStrictness").value = data.verify_strictness ?? 3;
+    setStrictnessLabel();
     document.getElementById("llmSummarizerModelManual").value = data.summarizer_model || "";
     document.getElementById("llmSummarizerModelManual").placeholder = data.summarizer_model
       ? ""

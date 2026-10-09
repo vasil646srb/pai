@@ -1379,3 +1379,32 @@ img, svg, video, canvas { max-width: 100%; height: auto; }
 .svc-run.err { color: var(--danger); }
 .svc-run-head { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
 .svc-run-text { white-space: pre-wrap; word-break: break-word; margin-top: 4px; }
+
+/* ---------- chat: copy message + quick replies ---------- */
+.msg-copy {
+  display: inline-flex; align-items: center; justify-content: center;
+  margin-top: 4px; padding: 2px 8px; height: 22px;
+  border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  background: var(--surface-2); color: var(--text-faint);
+  font-size: 12px; line-height: 1; cursor: pointer;
+}
+.msg-copy:hover { color: var(--text); border-color: var(--border); }
+.msg.user .msg-copy { margin-left: auto; display: flex; }
+.quick-replies {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  padding: 8px 12px 0; border-top: 1px solid var(--border-soft);
+}
+.quick-replies[hidden] { display: none; }
+.quick-reply {
+  max-width: 100%; white-space: normal; text-align: left;
+  border-color: var(--accent-cold); color: var(--accent-cold);
+  background: var(--accent-cold-dim);
+}
+.quick-reply:hover { filter: brightness(1.08); }
+
+/* ---------- service events in chat history (not part of the dialogue) ---------- */
+.msg.service-event { border: 1px dashed var(--accent-cold); border-radius: var(--radius); padding: 8px 10px; background: var(--surface-2); }
+.msg.service-event.assistant { align-self: flex-start; }
+.msg.service-event.user { align-self: flex-start; }
+.service-event-label { font-family: var(--mono); font-size: 10.5px; color: var(--accent-cold); margin-bottom: 4px; }
+.msg.service-event .bubble { background: transparent; border: none; padding: 0; }

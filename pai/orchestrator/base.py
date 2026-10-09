@@ -78,6 +78,7 @@ class Orchestrator:
         summarizer_llm: Optional[LLMClient] = None,
         verifier_llm: Optional[LLMClient] = None,
         vision_llm: Optional[LLMClient] = None,
+        verify_strictness: int = 3,
         target_free_ratio: float = TARGET_FREE_RATIO,
     ):
         self.storage = storage
@@ -93,6 +94,7 @@ class Orchestrator:
         self.verifier_llm = verifier_llm or self.summarizer_llm
         # Image description model; None = images go to the main model directly.
         self.vision_llm = vision_llm
+        self.verify_strictness = verify_strictness
         self.tree = TreeBuilder(storage, self.summarizer_llm)
         self.usage = UsageTracker()
         self.tree.usage = self.usage
@@ -132,6 +134,7 @@ class Orchestrator:
         summarizer_llm: Optional[LLMClient] = None,
         verifier_llm: Optional[LLMClient] = None,
         vision_llm: Optional[LLMClient] = None,
+        verify_strictness: int = 3,
         target_free_ratio: float = TARGET_FREE_RATIO,
     ) -> None:
         """Hot-swap the active LLM client (and everything derived from it —
@@ -147,6 +150,7 @@ class Orchestrator:
         self.summarizer_llm = summarizer_llm or llm
         self.verifier_llm = verifier_llm or self.summarizer_llm
         self.vision_llm = vision_llm
+        self.verify_strictness = verify_strictness
         self.tree.llm = self.summarizer_llm
         if max_tool_iterations is not None:
             self.max_tool_iterations = max_tool_iterations
@@ -182,13 +186,15 @@ class Orchestrator:
         """Get current cache status without triggering compression."""
         return self.cache.get_cache_status()
 
-    def handle_turn(self, user_text: str, persona_id: str, space_id: str = "personal", reference_now=None, images=None):
+    def handle_turn(self, user_text: str, persona_id: str, space_id: str = "personal", reference_now=None, images=None,
+                    origin=None):
         """Process a single user turn (non-streaming)."""
-        return self.dialog.handle_turn(user_text, persona_id, space_id, reference_now, images)
+        return self.dialog.handle_turn(user_text, persona_id, space_id, reference_now, images, origin)
 
-    def handle_turn_stream(self, user_text: str, persona_id: str, space_id: str = "personal", reference_now=None, images=None):
+    def handle_turn_stream(self, user_text: str, persona_id: str, space_id: str = "personal", reference_now=None,
+                           images=None, origin=None):
         """Process a single user turn with streaming response."""
-        return self.dialog.handle_turn_stream(user_text, persona_id, space_id, reference_now, images)
+        return self.dialog.handle_turn_stream(user_text, persona_id, space_id, reference_now, images, origin)
 
     def run_background_compression(self, space_id: str = "personal", force_top: bool = False):
         """Run tree compression in the background."""

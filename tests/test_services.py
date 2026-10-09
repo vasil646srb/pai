@@ -133,3 +133,26 @@ def test_api_crud_and_manual_run():
 
     assert c.delete(f"/services/{sid}").status_code == 200
     assert c.get("/services").json() == []
+
+
+def test_service_run_is_stored_as_separate_event_not_user_message():
+    c, main, app = _client()
+    sid = c.post("/services", json=_fields(name="Сводка")).json()["id"]
+    main.queue_response(content="Сводка: всё в порядке")
+    c.post(f"/services/{sid}/run")
+    for _ in range(100):
+        if c.get(f"/services/{sid}").json()["runs"]:
+            break
+        time.sleep(0.05)
+    history = c.get("/chat/history?space_id=personal&limit=50").json()["messages"]
+    events = [m for m in history if m["origin"] == "service"]
+    assert len(events) == 2
+    assert {m["role"] for m in events} == {"user", "assistant"}
+    assert all(m["origin_name"] == "Сводка" for m in events)
+    assert not [m for m in history if m["origin"] is None and m["text"] == "Сделай сводку"]
+
+
+def test_user_turns_are_not_marked_as_service():
+    from pai.orchestrator.dialog import event_tags
+    assert event_tags(None, "user") == ["user"]
+    assert event_tags({"kind": "service", "id": "abc", "name": "X"}, "assistant")[:2] == ["assistant", "service"]

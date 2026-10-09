@@ -10,6 +10,7 @@ Event types yielded by ``handle_turn_stream``:
     reasoning_delta  {text}            chain-of-thought chunk
     delta            {text}            answer chunk
     delta_reset      {}                discard answer text streamed so far
+    check_failed     {text, report, attempt}  an answer that failed the check; shown only in reasoning
                                        (the model turned out to want a tool)
     tool_call        {name, arguments}
     tool_result      {name, arguments, result}
@@ -70,18 +71,64 @@ def _announces_unfinished_action(text: str) -> bool:
 _log = logging.getLogger(__name__)
 
 _VISION_SYSTEM = (
-    "Ты описываешь изображения для другой модели, которая ответит пользователю. "
-    "Опиши, что на изображении, и перепиши весь видимый текст дословно, включая числа и подписи. "
-    "Не додумывай: если что-то не видно или не разборчиво, так и напиши. Отвечай только описанием, без вступления."
+    "You describe images for another model that will answer the user. "
+    "Describe what is shown in English and transcribe visible text in its original language, including numbers and captions. "
+    "Do not guess: if something is not visible or not legible, say so. "
+    "Write the whole answer in English. Output only the description, with no preamble."
 )
 
 _VERIFY_SYSTEM = (
-    "Ты проверяешь ответ ассистента пользователю. Даны последние сообщения диалога, последнее "
-    "сообщение пользователя и новый ответ ассистента. Реши, отвечает ли ответ на последнее сообщение "
-    "пользователя: выполнено ли его задание или дан ли ответ на его вопрос. Не оценивай стиль и не "
-    "проверяй факты. Ответь ТОЛЬКО одним JSON-объектом без пояснений: "
-    '{"ok": true} если ответ подходит, либо {"ok": false, "report": "что не так и что исправить"}.'
+    "You check an assistant's reply. You get the recent dialogue, the user's last message and the "
+    "assistant's new reply. Decide whether the reply is useful to the user.\n"
+    "Answer ONLY with one JSON object:\n"
+    '{"ok": true|false, "usefulness": 0-10, "user_language": "...", "report": "...", '
+    '"missing": "...", "suggested_replies": ["...", "..."]}\n'
+    "- ok: true if the reply answers or completes the user's last message in a useful way.\n"
+    "- usefulness: how useful the reply is to the user, 0-10.\n"
+    "- user_language: the language the user writes in, as an English name.\n"
+    "- report: if ok is false, one short sentence on what to fix. Otherwise an empty string.\n"
+    "- missing: what the user still needs and does not get, or an empty string.\n"
+    "- suggested_replies: 2 short replies the user may send next, written as the user.\n"
+    "Keys stay in English. report, missing and suggested_replies are in the user's language."
 )
+
+# Answer-check strictness: level -> (description for the checker, minimum usefulness to pass).
+_STRICTNESS_LEVELS = {
+    1: ("very lenient: accept any reasonable attempt that addresses the message", 3),
+    2: ("lenient: accept a reply that addresses the message even if it is imperfect", 4),
+    3: ("normal: the reply must address the message and be concretely useful", 5),
+    4: ("strict: the reply must fully address the message, be specific and complete", 6),
+    5: ("very strict: any gap, vagueness or unrequested omission fails the reply", 7),
+}
+
+
+def _strictness_level(value) -> int:
+    try:
+        return max(1, min(5, int(value)))
+    except (TypeError, ValueError):
+        return 3
+
+
+def _user_language_hint(text: str) -> str:
+    """Deterministic hint for the checker: Cyrillic-dominant text is Russian; otherwise the model
+    must detect the language from the user's message."""
+    letters = [ch for ch in (text or "") if ch.isalpha()]
+    if not letters:
+        return "the language of the user's last message (detect it)"
+    cyr = sum(1 for ch in letters if "\u0400" <= ch <= "\u04FF")
+    if cyr / len(letters) > 0.5:
+        return "Russian"
+    return "the language of the user's last message (detect it)"
+CHECK_FAILED_NOTICE = "⚠ Ответ не прошёл проверку. Текст ответа — в разделе размышлений."
+def event_tags(origin: Optional[dict], role: str) -> list[str]:
+    """Tags for a stored dialogue node. Service runs get their own tags so they are never
+    mistaken for something the user typed."""
+    if not origin or origin.get("kind") != "service":
+        return [role]
+    name = str(origin.get("name") or "")[:80]
+    return [role, "service", f"service:{origin.get('id')}", f"service-name:{name}"]
+
+
 _JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
@@ -89,11 +136,14 @@ def _verify_enabled() -> bool:
     return os.environ.get("PAI_VERIFY", "1") != "0"
 
 
+_MAX_CHECKS_PER_TURN = 2  # the answer check runs at most twice per turn
+
+
 def _verify_revisions() -> int:
     try:
-        return max(0, min(int(os.environ.get("PAI_VERIFY_REVISIONS", "2")), 5))
+        return max(0, min(int(os.environ.get("PAI_VERIFY_REVISIONS", "1")), 5))
     except ValueError:
-        return 2
+        return 1
 
 
 class _TurnState:
@@ -207,7 +257,7 @@ class DialogLoop:
         the call fails, so the caller can fall back to sending the images to the main model."""
         msgs = [{"role": "system", "content": _VISION_SYSTEM},
                 {"role": "user", "content": _build_user_content(
-                    f"Текст пользователя: {user_text or '(без текста)'}", images)}]
+                    f"User's text: {user_text or '(no text)'}", images)}]
         model = getattr(self.vision_llm, "model", "?")
         t0 = time.time()
         try:
@@ -233,12 +283,16 @@ class DialogLoop:
             return None
         nodes = self.storage.get_chat_messages(space_id=space_id, limit=4)
         dialog = "\n\n".join(
-            f"{'Ассистент' if 'assistant' in (n.tags or []) else 'Пользователь'}: {n.raw_content}"
+            f"{'Assistant' if 'assistant' in (n.tags or []) else ('Service task' if 'service' in (n.tags or []) else 'User')}: {n.raw_content}"
             for n in nodes
-        ) or "(пусто)"
-        prompt = (f"Последние сообщения диалога:\n{dialog}\n\n"
-                  f"Последнее сообщение пользователя:\n{user_text}\n\n"
-                  f"Новый ответ ассистента:\n{answer}")
+        ) or "(empty)"
+        level = _strictness_level(getattr(self, "verify_strictness", 3))
+        prompt = (f"Recent dialogue messages:\n{dialog}\n\n"
+                  f"User's last message:\n{user_text}\n\n"
+                  f"Assistant's new reply:\n{answer}\n\n"
+                  f"Check strictness: level {level} of 5, {_STRICTNESS_LEVELS[level][0]}. "
+                  f"User's language: {_user_language_hint(user_text)}. "
+                  f"Write suggested_replies, report and missing in that language.")
         try:
             model = getattr(self.verifier_llm, "model", "?")
             if self.verifier_llm is self.llm:
@@ -261,8 +315,36 @@ class DialogLoop:
         if not isinstance(data, dict) or "ok" not in data:
             _log.warning("answer check returned no verdict: %r", text[:200])
             return None
-        verdict = {"ok": bool(data["ok"]), "report": str(data.get("report") or "").strip()[:1000]}
-        _log.info("answer check [%s] model=%s: ok=%s%s", space_id, model, verdict["ok"],
+        try:
+            usefulness = max(0, min(10, int(float(data.get("usefulness")))))
+        except (TypeError, ValueError):
+            usefulness = None
+        replies = data.get("suggested_replies") or []
+        if not isinstance(replies, list):
+            replies = []
+        replies = [str(r).strip()[:300] for r in replies if str(r).strip()][:2]
+        try:
+            confidence = max(0.0, min(1.0, float(data.get("confidence"))))
+        except (TypeError, ValueError):
+            confidence = None
+        min_useful = _STRICTNESS_LEVELS[level][1]
+        passed = bool(data["ok"]) and (usefulness is None or usefulness >= min_useful)
+        verdict = {
+            "ok": passed,
+            "strictness": level,
+            "min_usefulness": min_useful,
+            "report": str(data.get("report") or "").strip()[:1000],
+            "usefulness": usefulness,
+            "confidence": confidence,
+            "missing": str(data.get("missing") or "").strip()[:300],
+            "suggested_replies": replies,
+            "user_language": str(data.get("user_language") or "").strip()[:40] or None,
+        }
+        if not passed and not verdict["report"]:
+            verdict["report"] = (f"usefulness {usefulness}/10 is below the {min_useful}/10 required "
+                                 f"at strictness level {level}")
+        _log.info("answer check [%s] model=%s: ok=%s useful=%s/10 lang=%s confidence=%s%s", space_id, model,
+                  verdict["ok"], usefulness, verdict["user_language"], confidence,
                   "" if verdict["ok"] else f" report={verdict['report']!r}")
         return verdict
 
@@ -279,17 +361,24 @@ class DialogLoop:
             return tool_trace, final_content, streamed
         revisions = _verify_revisions()
         msgs = messages
-        for attempt in range(revisions + 1):
+        checks = min(revisions + 1, _MAX_CHECKS_PER_TURN)
+        for attempt in range(checks):
             verdict = self._verify_answer(space_id, user_text, final_content)
             if verdict is None:
                 break
             state.verdicts.append({**verdict, "attempt": attempt + 1})
-            if verdict["ok"] or attempt == revisions:
+            if verdict["ok"]:
+                break
+            # A failed answer never stays in the chat: its text goes to the reasoning section.
+            yield {"type": "check_failed", "text": final_content, "report": verdict["report"],
+                   "attempt": attempt + 1}
+            if attempt == checks - 1:
+                final_content, streamed = CHECK_FAILED_NOTICE, False
                 break
             _log.info("answer revision %d/%d requested", attempt + 1, revisions)
-            feedback = (f"Проверка ответа не пройдена: {verdict['report']}\n"
-                        "Перепиши ответ на последнее сообщение пользователя с учётом замечаний. "
-                        "Если нужно, используй инструменты.")
+            feedback = (f"The answer check failed: {verdict['report']}\n"
+                        "Rewrite the reply to the user's last message taking these remarks into account, "
+                        "in the user's language. Use tools if needed.")
             msgs = msgs + [{"role": "assistant", "content": final_content},
                            {"role": "user", "content": feedback}]
             yield {"type": "delta_reset"}
@@ -431,11 +520,12 @@ class DialogLoop:
         space_id: str = "personal",
         reference_now: Optional[datetime] = None,
         images: Optional[list[str]] = None,
+        origin: Optional[dict] = None,
     ) -> "TurnResult":
         """Non-streaming wrapper: drains handle_turn_stream."""
         from .base import TurnResult  # lazy: base imports this module
         done = None
-        for ev in self.handle_turn_stream(user_text, persona_id, space_id, reference_now, images):
+        for ev in self.handle_turn_stream(user_text, persona_id, space_id, reference_now, images, origin):
             if ev["type"] == "done":
                 done = ev
         if done is None:  # pragma: no cover - generator always ends with "done"
@@ -456,7 +546,10 @@ class DialogLoop:
         space_id: str = "personal",
         reference_now: Optional[datetime] = None,
         images: Optional[list[str]] = None,
+        origin: Optional[dict] = None,
     ):
+        """origin: None for a user turn; {"kind": "service", "id", "name"} for an autonomous
+        service run. Service turns are stored as separate events, not as user messages."""
         persona = self.personas.get(persona_id)
         if persona is None:
             raise KeyError(f"Unknown persona: {persona_id}")
@@ -484,11 +577,11 @@ class DialogLoop:
             llm_user_text = user_text
             llm_images = images
             if description:
-                llm_user_text = f"{user_text}\n\n[Описание изображения: {description}]".strip()
+                llm_user_text = f"{user_text}\n\n[Image description: {description}]".strip()
                 llm_images = None
             memory_text = user_text
             if description:
-                memory_text = f"{user_text}\n\n[Изображение: {description}]".strip()
+                memory_text = f"{user_text}\n\n[Image: {description}]".strip()
             elif images:
                 memory_text = f"{user_text}\n\n[Attached images: {len(images)}]".strip()
             self.tree.ingest_raw(
@@ -496,7 +589,7 @@ class DialogLoop:
                 space_id=space_id,
                 node_type=NodeType.IMAGE if (images and not user_text) else NodeType.TEXT,
                 occurred_at=tctx.now.timestamp(),
-                tags=["user"],
+                tags=event_tags(origin, "user"),
                 annotations=[
                     {"raw_phrase": a.raw_phrase, "resolved_date": a.resolved_date, "confidence": a.confidence}
                     for a in annotations
@@ -536,7 +629,7 @@ class DialogLoop:
                 space_id=space_id,
                 node_type=NodeType.TEXT,
                 occurred_at=tctx.now.timestamp(),
-                tags=["assistant"],
+                tags=event_tags(origin, "assistant"),
                 reasoning=final_reasoning,
             )
 

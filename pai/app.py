@@ -261,6 +261,7 @@ def create_app(
         max_tool_iterations=saved_config.max_tool_iterations,
         summarizer_llm=app.state.summarizer_llm,
         verifier_llm=app.state.verifier_llm,
+        verify_strictness=saved_config.verify_strictness,
         vision_llm=app.state.vision_llm,
         target_free_ratio=saved_config.target_free_ratio(),
         timezone_name=os.environ.get("PAI_TIMEZONE", ""),
@@ -288,7 +289,8 @@ def create_app(
     def _execute_service(svc: dict) -> dict:
         if app.state.personas.get(svc["persona_id"]) is None:
             raise RuntimeError(f"персона '{svc['persona_id']}' не найдена")
-        result = app.state.orchestrator.handle_turn(svc["prompt"], svc["persona_id"], svc["space_id"])
+        origin = {"kind": "service", "id": svc["id"], "name": svc["name"]}
+        result = app.state.orchestrator.handle_turn(svc["prompt"], svc["persona_id"], svc["space_id"], origin=origin)
         return {"reply": result.reply}
 
     app.state.service_runner = ServiceRunner(app.state.services, _execute_service)
@@ -374,6 +376,7 @@ def create_app(
             summarizer_model=(payload.summarizer_model if payload.summarizer_model is not None else current.summarizer_model).strip(),
             verify_model=(payload.verify_model if payload.verify_model is not None else current.verify_model).strip(),
             vision_model=(payload.vision_model if payload.vision_model is not None else current.vision_model).strip(),
+            verify_strictness=(payload.verify_strictness if payload.verify_strictness is not None else current.verify_strictness),
             site_url=(payload.site_url if payload.site_url is not None else current.site_url).strip(),
             site_name=(payload.site_name if payload.site_name is not None else current.site_name).strip(),
             temperature=(payload.temperature if payload.temperature is not None else current.temperature),
@@ -411,6 +414,7 @@ def create_app(
             max_tool_iterations=new_config.max_tool_iterations,
             summarizer_llm=new_summarizer_llm,
             verifier_llm=new_verifier_llm,
+            verify_strictness=new_config.verify_strictness,
             vision_llm=new_vision_llm,
             target_free_ratio=new_config.target_free_ratio(),
         )
@@ -525,10 +529,15 @@ def create_app(
         out = []
         for n in nodes:
             role = "assistant" if (n.tags and "assistant" in n.tags) else "user"
+            tags = n.tags or []
+            origin = "service" if "service" in tags else None
+            origin_name = next((t[len("service-name:"):] for t in tags if t.startswith("service-name:")), None)
             out.append({
                 "id": n.id,
                 "position": n.position_in_history,
                 "role": role,
+                "origin": origin,
+                "origin_name": origin_name,
                 "text": n.raw_content,
                 "reasoning": n.reasoning if role == "assistant" else None,
                 "occurred_at": n.occurred_at,

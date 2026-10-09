@@ -72,6 +72,7 @@
         <div class="chat-messages" id="chatMessages">
           <div class="empty-state">Начните диалог — сообщения сохраняются в память сразу же (level 0).</div>
         </div>
+        <div class="quick-replies" id="quickReplies" hidden></div>
         <div class="chat-input-row">
           <button class="chat-attach-btn" id="btnAttachImage" type="button" title="Прикрепить изображение">📎</button>
           <input type="file" id="chatImageInput" accept="image/*" multiple hidden />
@@ -470,6 +471,14 @@
               </div>
               <div class="model-table-body" id="modelTableBodyVerify"></div>
             </div>
+          </div>
+          <div class="field field-wide">
+            <label>Строгость проверки ответа</label>
+            <div class="model-row">
+              <input type="range" id="llmVerifyStrictness" min="1" max="5" step="1" value="3" />
+              <span class="mono" id="llmVerifyStrictnessLabel" style="min-width:120px;font-size:12.5px;"></span>
+            </div>
+            <div class="field-hint">Насколько придирчиво проверять ответ: 1 — пропускает почти любой ответ по теме, 5 — не пропускает любой пробел. Ответ, который не проходит, уходит на переделку.</div>
           </div>
           <div class="field field-wide">
             <label>Модель для изображений <span class="opt-tag">опционально</span></label>

@@ -175,6 +175,7 @@ class LLMSettingsUpdate(BaseModel):
     summarizer_model: Optional[str] = None
     verify_model: Optional[str] = None
     vision_model: Optional[str] = None
+    verify_strictness: Optional[int] = Field(default=None, ge=1, le=5)
     site_url: Optional[str] = None
     site_name: Optional[str] = None
     temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
