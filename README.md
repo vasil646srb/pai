@@ -2,26 +2,26 @@
 
 ## Language / Язык
 
-Select your language / Выберите ваш язык:
-- [English](#english) | [Русский](#russian)
+- [English](#english)
+- [Русский](#русский)
 
 ---
 
 ## English
 
-### About the project
+### About the Project
 
 PAI is a personal AI assistant with hierarchical memory, custom functions, and tools.
 
-### Main features
+### Key Features
 
-- **Hierarchical memory** — tree structure (roots → children → leaves) with full-text search and export/import (WAL → JSONL)
+- **Hierarchical Memory** — tree structure (roots → children → leaves) with full-text search and export/import (WAL → JSONL)
 - **Personas** — different roles (tutor, work, mentor, etc.) with independent memory spaces and tool permissions
 - **Tools** — built-in (web_search, calculate_time_delta) and user-defined Python functions
 - **Self-generated rules & Skills** — behavior configurable via rules and skills
 - **API** — REST API for chat, memory, personas, tools, functions, rules, and external services
 
-### Quick start
+### Quick Start
 
 ```bash
 # Install dependencies
@@ -31,7 +31,7 @@ pip install -r requirements.txt
 # Start the server (FastAPI + Uvicorn)
 uvicorn pai.app:app --host 127.0.0.1 --port 8000
 
-# Access the UI
+# Access UI
 # http://127.0.0.1:8000
 
 # Tests
@@ -40,9 +40,9 @@ python -m pytest tests
 
 ### Environment
 
-- `PAI_DATA_DIR` — directory for data (default `./pai_data`)
-- `PAI_TIMEZONE` — timezone in IANA format (e.g. `Europe/Belgrade`; default system timezone)
-- `PAI_TAIL_LENGTH` — number of chat messages in the prompt tail (default 10)
+- `PAI_DATA_DIR` — data directory (default: `./pai_data`)
+- `PAI_TIMEZONE` — IANA timezone (e.g. `Europe/Belgrade`; default: system)
+- `PAI_TAIL_LENGTH` — number of chat messages in the prompt tail (default: 10)
 - `PAI_LLM_*` — LLM settings (see `pai/app.py`)
 
 ### Architecture
@@ -57,14 +57,14 @@ python -m pytest tests
 - Iteration 1 — memory backup/restore (export/import WAL → JSONL)
 - Iteration 2 — graceful exit when tool call limit is exhausted
 - Iteration 6 — `web_search` tool (internet search via DuckDuckGo)
-- Iteration 7 — persona `tool_permissions` via API
+- Iteration 7 — `tool_permissions` changes via API
 - Iteration 8 — pool of independent tool calls (parallel execution, planning)
 
-### User-defined functions
+### Custom Functions
 
-User-defined Python functions are stored as `draft` and require owner validation and activation. Activated functions are available in tool schemas and can be called by the model. Code runs in a separate process with a timeout (default 30 sec).
+User-defined Python functions are stored as `draft` and require owner validation and activation. Activated functions appear in tool schemas and can be invoked by the model. Code runs in a separate process with a timeout (default: 30 sec).
 
-### API endpoints
+### API Endpoints
 
 - `/chat`, `/chat/stream` — LLM chat
 - `/memory/*` — hierarchical storage (tree, roots, children, search, export/import)
