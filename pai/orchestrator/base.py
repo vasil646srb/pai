@@ -4,33 +4,28 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from typing import Optional
 
-from ..llm import LLMClient, LLMError
-from ..models import MemoryNode, NodeType, Persona, now_ts
+from ..cache_monitor import TARGET_FREE_RATIO, CacheMonitor
+from ..llm import LLMClient
+from ..models import MemoryNode
 from ..personas import PersonaRegistry, RulesManager
-from ..cache_monitor import CacheMonitor, CacheReading, TARGET_FREE_RATIO
-from ..skills import DEFAULT_CORE_RULES, SkillCatalog
+from ..skills import SkillCatalog
 from ..storage import Storage
-from ..time_utils import TimeContext, normalize_relative_dates
-from ..tools import ToolDispatcher, ToolError
 from ..tree import TreeBuilder
-from ..usage import UsageTracker, estimate_tokens
-
-from .context import ContextBuilder
+from ..usage import UsageTracker
 from .cache import CacheManager
-from .llm_runner import LLMRunner
+from .context import ContextBuilder
+from .llm_runner import _ITERATION_LIMIT_FALLBACK, _ITERATION_LIMIT_NUDGE, LLMRunner  # noqa: F401
 from .tool_pool import ToolPoolPlanner
 
 MAX_TOOL_ITERATIONS = 6
-from .llm_runner import _ITERATION_LIMIT_FALLBACK, _ITERATION_LIMIT_NUDGE  # noqa: F401
 
 
 @dataclass
 class TurnResult:
     """Result of a single user turn."""
     reply: str
-    reasoning: Optional[str] = None
+    reasoning: str | None = None
     tool_trace: list[dict] = field(default_factory=list)
     usage: dict = field(default_factory=dict)
     cache_status: dict = field(default_factory=dict)
@@ -42,7 +37,7 @@ class TurnResult:
     compressed_nodes: int = 0
 
 
-def _build_user_content(user_text: str, images: Optional[list[str]] = None) -> str:
+def _build_user_content(user_text: str, images: list[str] | None = None) -> str:
     """Build user message content, optionally with images."""
     if not images:
         return user_text
@@ -67,19 +62,21 @@ class Orchestrator:
         llm: LLMClient,
         persona_registry: PersonaRegistry,
         skill_catalog: SkillCatalog,
-        rules_manager: Optional[RulesManager] = None,
+        rules_manager: RulesManager | None = None,
         tail_length: int = 6,
         timezone_name: str = "",
-        cache_monitor: Optional[CacheMonitor] = None,
-        llm_base_url: Optional[str] = None,
-        known_context_length: Optional[int] = None,
+        cache_monitor: CacheMonitor | None = None,
+        llm_base_url: str | None = None,
+        known_context_length: int | None = None,
         max_tool_iterations: int = MAX_TOOL_ITERATIONS,
         custom_functions=None,
-        summarizer_llm: Optional[LLMClient] = None,
-        verifier_llm: Optional[LLMClient] = None,
-        vision_llm: Optional[LLMClient] = None,
+        summarizer_llm: LLMClient | None = None,
+        verifier_llm: LLMClient | None = None,
+        vision_llm: LLMClient | None = None,
         verify_strictness: int = 3,
         target_free_ratio: float = TARGET_FREE_RATIO,
+        verify_enabled: bool = True,
+        verify_revisions: int = 1,
     ):
         self.storage = storage
         self.llm = llm
@@ -99,6 +96,8 @@ class Orchestrator:
         self.usage = UsageTracker()
         self.tree.usage = self.usage
         self.tail_length = tail_length
+        self.verify_enabled = verify_enabled
+        self.verify_revisions = verify_revisions
         self.timezone_name = timezone_name
         self.max_tool_iterations = max_tool_iterations
         self._history: list[MemoryNode] = []  # raw level-0 nodes not yet compressed, this session
@@ -128,12 +127,12 @@ class Orchestrator:
     def reconfigure_llm(
         self,
         llm: LLMClient,
-        llm_base_url: Optional[str] = None,
-        known_context_length: Optional[int] = None,
-        max_tool_iterations: Optional[int] = None,
-        summarizer_llm: Optional[LLMClient] = None,
-        verifier_llm: Optional[LLMClient] = None,
-        vision_llm: Optional[LLMClient] = None,
+        llm_base_url: str | None = None,
+        known_context_length: int | None = None,
+        max_tool_iterations: int | None = None,
+        summarizer_llm: LLMClient | None = None,
+        verifier_llm: LLMClient | None = None,
+        vision_llm: LLMClient | None = None,
         verify_strictness: int = 3,
         target_free_ratio: float = TARGET_FREE_RATIO,
     ) -> None:

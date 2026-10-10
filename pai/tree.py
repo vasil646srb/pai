@@ -7,14 +7,16 @@ giving logarithmic growth of live context relative to linear history growth.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
-from typing import Optional
 
 from .llm import LLMClient
 from .models import MemoryNode, NodeStatus, NodeType, now_ts
+from .prompts import load_prompt
 from .storage import Storage
 from .usage import estimate_tokens
 
+_log = logging.getLogger(__name__)
 
 MAX_FRAGMENT_CHARS_FOR_SUMMARY = 3000
 
@@ -35,10 +37,10 @@ class TreeBuilder:
         content: str,
         space_id: str = "personal",
         node_type: NodeType = NodeType.TEXT,
-        occurred_at: Optional[float] = None,
-        tags: Optional[list[str]] = None,
-        annotations: Optional[list] = None,
-        reasoning: Optional[str] = None,
+        occurred_at: float | None = None,
+        tags: list[str] | None = None,
+        annotations: list | None = None,
+        reasoning: str | None = None,
     ) -> MemoryNode:
         node = MemoryNode(
             space_id=space_id,
@@ -74,23 +76,7 @@ class TreeBuilder:
 
     def _summary_instruction(self) -> str:
         return (
-            "You are creating a summary node for the assistant's hierarchical "
-            "memory. This memory is not indexed by embedding search — the "
-            "summary node is the ONLY way to understand what's inside before "
-            "someone opens a fragment via get_fragment. So write a navigation "
-            "table of contents, not a retelling.\n\n"
-            "The format is mandatory:\n"
-            "1) An overall summary of the group's topic (1-2 sentences).\n"
-            "2) A line-by-line list FOR EACH fragment in the form:\n"
-            "   - (id=<exact_id>) <precise title/topic of the fragment, 3-8 "
-            "words> — <exactly what's in it: facts, decisions, entities, "
-            "dates, proper names>\n"
-            "Each list line must contain the fragment's exact id and be "
-            "sufficient to decide whether it's worth opening that id via "
-            "get_fragment, WITHOUT opening it. Use concrete names, terms, and "
-            "entities from the fragment, not generic words like 'discussion' "
-            "or 'information'. Don't invent facts that aren't in the "
-            "fragments."
+            load_prompt("summary_instruction")
         )
 
     def compress_level(
@@ -124,7 +110,7 @@ class TreeBuilder:
             # blank summary.
         return new_nodes
 
-    def _summarize_group(self, group: list[MemoryNode], new_level: int, space_id: str) -> Optional[MemoryNode]:
+    def _summarize_group(self, group: list[MemoryNode], new_level: int, space_id: str) -> MemoryNode | None:
         from .orchestrator.llm_runner import calibrate_breakdown  # lazy: avoids import cycle
         text_block = self._format_group_for_summary(group)
         instruction = self._summary_instruction()
@@ -157,7 +143,6 @@ class TreeBuilder:
             "input_chars": len(text_block), "input_tokens_est": estimate_tokens(text_block),
         }
         summary_text = ""
-        last_meta: dict = {}
         for attempt in range(2):  # one retry — covers transient empty/truncated responses
             attempt_req = dict(base_req, attempt=attempt)
             try:
@@ -171,7 +156,6 @@ class TreeBuilder:
                     ex = {"summary": summary_text, "usage": {}, "model": getattr(self.llm, "model", ""),
                           "context_length": None, "request_params": {}, "latency_seconds": _t.time() - _t0,
                           "reasoning": None}
-                last_meta = ex
                 u = ex.get("usage") or {}
                 bd = calibrate_breakdown(dict(req_breakdown, parts=[dict(p) for p in req_breakdown["parts"]]), u)
                 out_tok = int(u.get("completion_tokens") or estimate_tokens(summary_text))
@@ -212,9 +196,10 @@ class TreeBuilder:
                         },
                         space_id=space_id, latency_seconds=ex.get("latency_seconds"),
                     )
-                except Exception:
-                    pass
-            except Exception as e:
+                except Exception as log_err:  # event logging must never block compression
+                    _log.warning("compression event not recorded: %s", log_err, exc_info=True)
+            except Exception as e:  # summarizer failure: retried once, then the group is skipped
+                _log.warning("summarizer failed on attempt %s: %s", attempt, e, exc_info=True)
                 summary_text = ""
                 try:
                     self.storage.log_compression_event(
@@ -232,8 +217,8 @@ class TreeBuilder:
                                      dict(req_breakdown, parts=[dict(p) for p in req_breakdown["parts"]]), {})},
                         space_id=space_id, error=str(e),
                     )
-                except Exception:
-                    pass
+                except Exception as log_err:  # event logging must never block compression
+                    _log.warning("compression event not recorded: %s", log_err, exc_info=True)
             if summary_text.strip():
                 break
 
@@ -243,16 +228,16 @@ class TreeBuilder:
                     "summary_failed", {"source_node_ids": src_ids, "source_level": src_level},
                     response={"reason": "empty_summary_after_retry"}, space_id=space_id,
                 )
-            except Exception:
-                pass
+            except Exception as log_err:  # event logging must never block compression
+                _log.warning("compression event not recorded: %s", log_err, exc_info=True)
             return None
 
         try:
             self.storage.log_compression_event(
                 "summary_result", {"source_node_ids": src_ids, "source_level": src_level, "target_level": new_level},
                 response={"summary": summary_text}, space_id=space_id)
-        except Exception:
-            pass
+        except Exception as log_err:  # event logging must never block compression
+            _log.warning("compression event not recorded: %s", log_err, exc_info=True)
         ids_note = ", ".join(n.id for n in group)
         if ids_note not in summary_text:
             summary_text = f"{summary_text}\nExact fragments: {ids_note}."
@@ -348,7 +333,7 @@ class TreeBuilder:
         roots.sort(key=lambda n: (-n.level, n.position_in_history))
         return roots[:max_nodes]
 
-    def compression_ratio(self, space_id: Optional[str] = None) -> dict:
+    def compression_ratio(self, space_id: str | None = None) -> dict:
         stats = self.storage.stats()
         by_level = stats["by_level"]
         raw_count = by_level.get(0, 0)

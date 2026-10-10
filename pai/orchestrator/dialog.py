@@ -23,17 +23,17 @@ Event types yielded by ``handle_turn_stream``:
 from __future__ import annotations
 
 import json
-import time
 import logging
-import os
 import re
+import time
 from datetime import datetime
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from ..llm import LLMError
 from ..models import NodeType, Persona
-from ..tools import TOOL_PLAN_SCHEMA, ToolDispatcher, ToolError
+from ..prompts import load_prompt
 from ..time_utils import normalize_relative_dates
+from ..tools import TOOL_PLAN_SCHEMA, ToolDispatcher, ToolError
 from ..usage import estimate_tokens
 from .base import _build_user_content
 from .llm_runner import _ITERATION_LIMIT_FALLBACK, _ITERATION_LIMIT_NUDGE
@@ -71,25 +71,11 @@ def _announces_unfinished_action(text: str) -> bool:
 _log = logging.getLogger(__name__)
 
 _VISION_SYSTEM = (
-    "You describe images for another model that will answer the user. "
-    "Describe what is shown in English and transcribe visible text in its original language, including numbers and captions. "
-    "Do not guess: if something is not visible or not legible, say so. "
-    "Write the whole answer in English. Output only the description, with no preamble."
+    load_prompt("vision_system")
 )
 
 _VERIFY_SYSTEM = (
-    "You check an assistant's reply. You get the recent dialogue, the user's last message and the "
-    "assistant's new reply. Decide whether the reply is useful to the user.\n"
-    "Answer ONLY with one JSON object:\n"
-    '{"ok": true|false, "usefulness": 0-10, "user_language": "...", "report": "...", '
-    '"missing": "...", "suggested_replies": ["...", "..."]}\n'
-    "- ok: true if the reply answers or completes the user's last message in a useful way.\n"
-    "- usefulness: how useful the reply is to the user, 0-10.\n"
-    "- user_language: the language the user writes in, as an English name.\n"
-    "- report: if ok is false, one short sentence on what to fix. Otherwise an empty string.\n"
-    "- missing: what the user still needs and does not get, or an empty string.\n"
-    "- suggested_replies: 2 short replies the user may send next, written as the user.\n"
-    "Keys stay in English. report, missing and suggested_replies are in the user's language."
+    load_prompt("verify_system")
 )
 
 # Answer-check strictness: level -> (description for the checker, minimum usefulness to pass).
@@ -120,7 +106,10 @@ def _user_language_hint(text: str) -> str:
         return "Russian"
     return "the language of the user's last message (detect it)"
 CHECK_FAILED_NOTICE = "⚠ Ответ не прошёл проверку. Текст ответа — в разделе размышлений."
-def event_tags(origin: Optional[dict], role: str) -> list[str]:
+# Texts the app itself writes into the chat. Stored with the "notice" tag: visible in history,
+# but never sent back to the model as its own earlier words.
+_SYSTEM_NOTICES = frozenset({_ITERATION_LIMIT_FALLBACK, _EMPTY_HINT, _EMPTY_LENGTH_HINT, CHECK_FAILED_NOTICE})
+def event_tags(origin: dict | None, role: str) -> list[str]:
     """Tags for a stored dialogue node. Service runs get their own tags so they are never
     mistaken for something the user typed."""
     if not origin or origin.get("kind") != "service":
@@ -132,18 +121,7 @@ def event_tags(origin: Optional[dict], role: str) -> list[str]:
 _JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
-def _verify_enabled() -> bool:
-    return os.environ.get("PAI_VERIFY", "1") != "0"
-
-
 _MAX_CHECKS_PER_TURN = 2  # the answer check runs at most twice per turn
-
-
-def _verify_revisions() -> int:
-    try:
-        return max(0, min(int(os.environ.get("PAI_VERIFY_REVISIONS", "1")), 5))
-    except ValueError:
-        return 1
 
 
 class _TurnState:
@@ -154,7 +132,7 @@ class _TurnState:
         self.verdicts: list[dict] = []   # answer checks made during this turn
 
     @property
-    def reasoning(self) -> Optional[str]:
+    def reasoning(self) -> str | None:
         text = "".join(self.reasoning_parts).strip()
         return text or None
 
@@ -162,7 +140,7 @@ class _TurnState:
 class DialogLoop:
     """Orchestrates the full dialog cycle using Orchestrator components."""
 
-    def __init__(self, orch: "Orchestrator"):
+    def __init__(self, orch: Orchestrator):
         self.orch = orch
 
     def __getattr__(self, name):
@@ -250,9 +228,9 @@ class DialogLoop:
                 response={"content": text, "usage": usage, "model": resp_model or model},
             )
         except Exception as e:  # logging must never block the answer
-            _log.warning("%s log failed: %s", purpose, e)
+            _log.warning("%s log failed: %s", purpose, e, exc_info=True)
 
-    def _describe_images(self, space_id: str, user_text: str, images: list[str]) -> Optional[str]:
+    def _describe_images(self, space_id: str, user_text: str, images: list[str]) -> str | None:
         """Ask the vision model for a text description of the images. Returns None when
         the call fails, so the caller can fall back to sending the images to the main model."""
         msgs = [{"role": "system", "content": _VISION_SYSTEM},
@@ -262,8 +240,8 @@ class DialogLoop:
         t0 = time.time()
         try:
             raw = self.vision_llm.chat(messages=msgs, temperature=0.2, max_tokens=800)
-        except Exception as e:
-            _log.warning("image description failed, images go to the main model: %s", e)
+        except Exception as e:  # the vision model is optional: any failure falls back to the main model
+            _log.warning("image description failed, images go to the main model: %s", e, exc_info=True)
             return None
         latency = time.time() - t0
         text = (raw.get("content") or "").strip()
@@ -275,7 +253,7 @@ class DialogLoop:
         _log.info("image description [%s] model=%s: %d chars", space_id, model, len(text))
         return text
 
-    def _verify_answer(self, space_id: str, user_text: str, answer: str) -> Optional[dict]:
+    def _verify_answer(self, space_id: str, user_text: str, answer: str) -> dict | None:
         """Ask the small model whether `answer` addresses the user's last message.
         Returns {"ok": bool, "report": str}, or None when the check itself failed
         (then the answer is not blocked)."""
@@ -308,7 +286,7 @@ class DialogLoop:
             m = _JSON_OBJ_RE.search(text)
             data = json.loads(m.group(0)) if m else None
         except Exception as e:  # check failed: do not block the user's answer
-            _log.warning("answer check failed: %s", e)
+            _log.warning("answer check failed: %s", e, exc_info=True)
             return None
         self._record_side_call("answer_check", model, space_id, latency, raw.get("usage") or {},
                                verify_msgs, text, raw.get("model") or "")
@@ -353,13 +331,13 @@ class DialogLoop:
         """Generator. Checks the final answer; on a failed check sends the report back to the
         main model for a rewrite, at most PAI_VERIFY_REVISIONS times. Returns the final
         (tool_trace, content, streamed)."""
-        if not _verify_enabled():
+        if not self.verify_enabled:
             _log.info("answer check disabled (PAI_VERIFY=0)")
             return tool_trace, final_content, streamed
         if self.verifier_llm is None:
             _log.info("answer check skipped: no checker model configured")
             return tool_trace, final_content, streamed
-        revisions = _verify_revisions()
+        revisions = self.verify_revisions
         msgs = messages
         checks = min(revisions + 1, _MAX_CHECKS_PER_TURN)
         for attempt in range(checks):
@@ -480,7 +458,7 @@ class DialogLoop:
                 yield {"type": "tool_call", "name": tc["name"], "arguments": tc["arguments"]}
             executed = self._execute_tool_pool(dispatcher, pool, persona)
             self._record_tool_results(executed, tool_trace, space_id, reference_now)
-            for tc, tool_result, latency, tool_error in executed:
+            for tc, tool_result, _latency, _tool_error in executed:
                 yield {"type": "tool_result", "name": tc["name"], "arguments": tc["arguments"], "result": tool_result}
 
             results_json = json.dumps(
@@ -518,10 +496,10 @@ class DialogLoop:
         user_text: str,
         persona_id: str,
         space_id: str = "personal",
-        reference_now: Optional[datetime] = None,
-        images: Optional[list[str]] = None,
-        origin: Optional[dict] = None,
-    ) -> "TurnResult":
+        reference_now: datetime | None = None,
+        images: list[str] | None = None,
+        origin: dict | None = None,
+    ) -> TurnResult:
         """Non-streaming wrapper: drains handle_turn_stream."""
         from .base import TurnResult  # lazy: base imports this module
         done = None
@@ -544,9 +522,9 @@ class DialogLoop:
         user_text: str,
         persona_id: str,
         space_id: str = "personal",
-        reference_now: Optional[datetime] = None,
-        images: Optional[list[str]] = None,
-        origin: Optional[dict] = None,
+        reference_now: datetime | None = None,
+        images: list[str] | None = None,
+        origin: dict | None = None,
     ):
         """origin: None for a user turn; {"kind": "service", "id", "name"} for an autonomous
         service run. Service turns are stored as separate events, not as user messages."""
@@ -629,7 +607,7 @@ class DialogLoop:
                 space_id=space_id,
                 node_type=NodeType.TEXT,
                 occurred_at=tctx.now.timestamp(),
-                tags=event_tags(origin, "assistant"),
+                tags=event_tags(origin, "assistant") + (["notice"] if final_content in _SYSTEM_NOTICES else []),
                 reasoning=final_reasoning,
             )
 

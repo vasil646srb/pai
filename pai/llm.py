@@ -12,12 +12,12 @@ Event protocol of ``chat_stream`` (shared by every client):
 from __future__ import annotations
 
 import json
-import socket
 import time
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
-from typing import Any, Iterator, Optional
+from collections.abc import Iterator
+from typing import Any
 
 from .usage import estimate_tokens
 
@@ -30,7 +30,7 @@ class LLMError(RuntimeError):
 # helpers: reasoning / content / tool-call extraction
 # --------------------------------------------------------------------------
 
-def extract_reasoning(obj: Optional[dict]) -> str:
+def extract_reasoning(obj: dict | None) -> str:
     """Pull chain-of-thought text out of a message / delta, whatever the
     provider calls it:
       * ``reasoning``          — OpenRouter unified field, gpt-oss on vLLM
@@ -158,10 +158,10 @@ class LLMClient(ABC):
     def chat(
         self,
         messages: list[dict],
-        tools: Optional[list[dict]] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        top_p: Optional[float] = None,
+        tools: list[dict] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        top_p: float | None = None,
         tool_choice=None,
     ) -> dict:
         """Return a dict: {"content": str|None, "tool_calls": list[dict],
@@ -220,10 +220,10 @@ class LLMClient(ABC):
     def chat_stream(
         self,
         messages: list[dict],
-        tools: Optional[list[dict]] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        top_p: Optional[float] = None,
+        tools: list[dict] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        top_p: float | None = None,
         tool_choice=None,
     ) -> Iterator[dict]:
         """Default fallback for clients without real streaming: call chat()
@@ -275,16 +275,16 @@ class OpenAICompatibleClient(LLMClient):
         api_key: str = "",
         model: str = "gpt-4o-mini",
         timeout: float = 180.0,
-        extra_headers: Optional[dict[str, str]] = None,
+        extra_headers: dict[str, str] | None = None,
         temperature: float = 0.3,
         max_tokens: int = 1024,
-        top_p: Optional[float] = None,
+        top_p: float | None = None,
         context_window: int = 8192,
         reasoning_enabled: bool = False,
         reasoning_effort: str = "medium",
-        top_k: Optional[int] = None,
-        frequency_penalty: Optional[float] = None,
-        presence_penalty: Optional[float] = None,
+        top_k: int | None = None,
+        frequency_penalty: float | None = None,
+        presence_penalty: float | None = None,
     ):
         self.base_url = self._normalize_base_url(base_url)
         self.api_key = api_key
@@ -360,7 +360,7 @@ class OpenAICompatibleClient(LLMClient):
                             total += estimate_tokens(str(block.get("text") or ""))
         return max(1, total)
 
-    def _effective_max_tokens(self, messages: list[dict], requested: Optional[int]) -> int:
+    def _effective_max_tokens(self, messages: list[dict], requested: int | None) -> int:
         configured = self.max_tokens if requested is None else requested
         input_tokens = self._estimate_message_tokens(messages)
         available = self.context_window - input_tokens
@@ -406,7 +406,7 @@ class OpenAICompatibleClient(LLMClient):
             payload["stream_options"] = {"include_usage": True}
         return payload
 
-    def _open(self, url: str, payload: Optional[dict], method: str = "POST"):
+    def _open(self, url: str, payload: dict | None, method: str = "POST"):
         """urlopen with retry on transient statuses; every failure mode is
         mapped to LLMError so callers (and the SSE endpoint) always get a
         readable message."""
@@ -424,7 +424,7 @@ class OpenAICompatibleClient(LLMClient):
                 raise LLMError(f"HTTP {e.code} from {url}: {err_body}") from e
             except urllib.error.URLError as e:
                 raise LLMError(f"Failed to reach {url}: {e}") from e
-            except (socket.timeout, TimeoutError) as e:
+            except TimeoutError as e:
                 raise LLMError(f"Timeout after {self.timeout:.0f}s waiting for {url}") from e
             except OSError as e:
                 raise LLMError(f"Network error talking to {url}: {e}") from e
@@ -435,10 +435,10 @@ class OpenAICompatibleClient(LLMClient):
     def chat(
         self,
         messages: list[dict],
-        tools: Optional[list[dict]] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        top_p: Optional[float] = None,
+        tools: list[dict] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        top_p: float | None = None,
         tool_choice=None,
     ) -> dict:
         url = f"{self.base_url}/chat/completions"
@@ -446,7 +446,7 @@ class OpenAICompatibleClient(LLMClient):
         try:
             with self._open(url, payload) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
-        except (socket.timeout, TimeoutError) as e:
+        except TimeoutError as e:
             raise LLMError(f"Timeout after {self.timeout:.0f}s waiting for {url}") from e
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             raise LLMError(f"Non-JSON response from {url}: {e}") from e
@@ -485,10 +485,10 @@ class OpenAICompatibleClient(LLMClient):
     def chat_stream(
         self,
         messages: list[dict],
-        tools: Optional[list[dict]] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        top_p: Optional[float] = None,
+        tools: list[dict] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        top_p: float | None = None,
         tool_choice=None,
     ) -> Iterator[dict]:
         """Real token-by-token SSE streaming, with tool-call support.
@@ -501,8 +501,8 @@ class OpenAICompatibleClient(LLMClient):
         splitter = ThinkSplitter()
         saw_native_reasoning = False
         tool_acc: dict[int, dict] = {}
-        finish_reason: Optional[str] = None
-        last_usage: Optional[dict] = None
+        finish_reason: str | None = None
+        last_usage: dict | None = None
 
         def emit_content(piece: str):
             if saw_native_reasoning:
@@ -568,7 +568,7 @@ class OpenAICompatibleClient(LLMClient):
                             slot["args"] += a
                         elif isinstance(a, dict):
                             slot["args"] = json.dumps(a)
-        except (socket.timeout, TimeoutError) as e:
+        except TimeoutError as e:
             raise LLMError(f"Timeout after {self.timeout:.0f}s waiting for {url}") from e
         except (ConnectionError, OSError) as e:
             if isinstance(e, LLMError):
@@ -600,7 +600,7 @@ class OpenAICompatibleClient(LLMClient):
         try:
             with self._open(url, None, method="GET") as resp:
                 body = json.loads(resp.read().decode("utf-8"))
-        except (socket.timeout, TimeoutError) as e:
+        except TimeoutError as e:
             raise LLMError(f"Timeout waiting for {url}") from e
         except json.JSONDecodeError as e:
             raise LLMError(f"Malformed response from {url}: {e}") from e
@@ -626,13 +626,13 @@ class OpenAICompatibleClient(LLMClient):
         return out
 
     @staticmethod
-    def _parse_pricing(pricing: Any) -> tuple[Optional[float], Optional[float]]:
+    def _parse_pricing(pricing: Any) -> tuple[float | None, float | None]:
         """OpenRouter pricing is USD-per-token strings; convert to USD per 1M.
         Zero/missing/malformed → None ("unknown", not "free")."""
         if not isinstance(pricing, dict):
             return None, None
 
-        def to_per_million(raw: Any) -> Optional[float]:
+        def to_per_million(raw: Any) -> float | None:
             try:
                 value = float(raw)
             except (TypeError, ValueError):
@@ -643,7 +643,7 @@ class OpenAICompatibleClient(LLMClient):
 
         return to_per_million(pricing.get("prompt")), to_per_million(pricing.get("completion"))
 
-    def fetch_model_context_length(self) -> Optional[int]:
+    def fetch_model_context_length(self) -> int | None:
         """Best-effort lookup of the configured model's real context window."""
         try:
             models = self.list_models()
@@ -664,25 +664,25 @@ class MockLLM(LLMClient):
     `responses` is an optional queue of canned responses; otherwise falls back
     to trivial deterministic behavior (echo / truncate-based summary)."""
 
-    def __init__(self, responses: Optional[list[dict]] = None):
+    def __init__(self, responses: list[dict] | None = None):
         self._queue = list(responses) if responses else []
         self.calls: list[dict] = []
 
     def queue_response(
         self,
-        content: Optional[str] = None,
-        tool_calls: Optional[list[dict]] = None,
-        reasoning: Optional[str] = None,
+        content: str | None = None,
+        tool_calls: list[dict] | None = None,
+        reasoning: str | None = None,
     ) -> None:
         self._queue.append({"content": content, "tool_calls": tool_calls or [], "reasoning": reasoning})
 
     def chat(
         self,
         messages: list[dict],
-        tools: Optional[list[dict]] = None,
-        temperature: Optional[float] = 0.3,
-        max_tokens: Optional[int] = 1024,
-        top_p: Optional[float] = None,
+        tools: list[dict] | None = None,
+        temperature: float | None = 0.3,
+        max_tokens: int | None = 1024,
+        top_p: float | None = None,
         tool_choice=None,
     ) -> dict:
         self.calls.append({"messages": messages, "tools": tools, "tool_choice": tool_choice})
@@ -706,10 +706,10 @@ class MockLLM(LLMClient):
     def chat_stream(
         self,
         messages: list[dict],
-        tools: Optional[list[dict]] = None,
-        temperature: Optional[float] = 0.3,
-        max_tokens: Optional[int] = 1024,
-        top_p: Optional[float] = None,
+        tools: list[dict] | None = None,
+        temperature: float | None = 0.3,
+        max_tokens: int | None = 1024,
+        top_p: float | None = None,
         tool_choice=None,
     ) -> Iterator[dict]:
         result = self.chat(messages=messages, tools=tools, tool_choice=tool_choice)

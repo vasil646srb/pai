@@ -12,9 +12,8 @@ from __future__ import annotations
 import json
 import os
 import stat
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Optional
 
 
 def _clamp_strictness(value) -> int:
@@ -49,7 +48,7 @@ class LLMConfig:
     # from the model on every call, as opposed to routing/auth fields above.
     temperature: float = 0.3
     max_tokens: int = 1024
-    top_p: Optional[float] = None  # None = omit from the request, let the provider default apply
+    top_p: float | None = None  # None = omit from the request, let the provider default apply
     # Reasoning ("thinking") tokens — OpenRouter's unified `reasoning` request
     # param (https://openrouter.ai/docs/use-cases/reasoning-tokens). Models
     # that don't support it (or providers that aren't OpenRouter) simply
@@ -66,9 +65,9 @@ class LLMConfig:
     # behavior. Translated into CacheMonitor.target_free_ratio as
     # (100 - compression_trigger_pct) / 100.
     compression_trigger_pct: int = 50
-    top_k: Optional[int] = None  # top-k sampling
-    frequency_penalty: Optional[float] = None  # penalty for repetition
-    presence_penalty: Optional[float] = None  # penalty for new tokens
+    top_k: int | None = None  # top-k sampling
+    frequency_penalty: float | None = None  # penalty for repetition
+    presence_penalty: float | None = None  # penalty for new tokens
 
     def is_configured(self) -> bool:
         return bool(self.base_url and self.model)

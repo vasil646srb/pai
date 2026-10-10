@@ -7,13 +7,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import pytest
 from fastapi.testclient import TestClient
 
 from pai.app import create_app
 from pai.llm import MockLLM
-
-
-import pytest
 
 
 @pytest.fixture(autouse=True)

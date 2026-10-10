@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 
 def estimate_tokens(text: str, tokenizer_id: str = "approx-4chars") -> int:
@@ -28,12 +28,12 @@ class UsageEvent:
     latency_seconds: float
     cost_usd: float
     model: str = ""
-    context_length: Optional[int] = None
+    context_length: int | None = None
     cached_input_tokens: int = 0
     reasoning_tokens: int = 0
     source: str = "estimate"
-    prompt_price_per_1m: Optional[float] = None
-    completion_price_per_1m: Optional[float] = None
+    prompt_price_per_1m: float | None = None
+    completion_price_per_1m: float | None = None
     total_tokens: int = 0
 
     def to_dict(self) -> dict:
@@ -65,9 +65,9 @@ class UsageTracker:
 
     def record_api(
         self, kind: str, usage: dict[str, Any], latency_seconds: float,
-        *, model: str = "", context_length: Optional[int] = None,
-        tool_calls: int = 0, prompt_price_per_1m: Optional[float] = None,
-        completion_price_per_1m: Optional[float] = None,
+        *, model: str = "", context_length: int | None = None,
+        tool_calls: int = 0, prompt_price_per_1m: float | None = None,
+        completion_price_per_1m: float | None = None,
     ) -> UsageEvent:
         """Record provider-reported usage. OpenRouter is the source of truth."""
         inp = int(usage.get("prompt_tokens") or 0)

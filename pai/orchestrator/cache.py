@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
-from ..cache_monitor import CacheMonitor, CacheReading, TARGET_FREE_RATIO
+from ..cache_monitor import CacheReading
 from ..models import Persona
 from ..usage import estimate_tokens
 
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 class CacheManager:
     """Decides when and how deeply to compress based on cache pressure."""
 
-    def __init__(self, orch: "Orchestrator"):
+    def __init__(self, orch: Orchestrator):
         # Nothing is cached from `orch` here: reconfigure_llm() replaces
         # orch.cache_monitor at runtime (new context window / trigger %), and
         # attribute access falls through __getattr__ to the live object.

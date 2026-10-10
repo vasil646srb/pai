@@ -4,9 +4,8 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Any, Optional
 
 
 def new_id() -> str:
@@ -57,14 +56,14 @@ class RuleStatus(str, Enum):
 class TemporalAnnotation:
     """Resolved relative-date annotation, stored separately from raw text."""
     raw_phrase: str
-    resolved_date: Optional[str]  # ISO date string, None if unresolved
+    resolved_date: str | None  # ISO date string, None if unresolved
     confidence: str = "medium"  # low | medium | high
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @staticmethod
-    def from_dict(d: dict) -> "TemporalAnnotation":
+    def from_dict(d: dict) -> TemporalAnnotation:
         return TemporalAnnotation(**d)
 
 
@@ -77,25 +76,25 @@ class MemoryNode:
     id: str = field(default_factory=new_id)
     space_id: str = "personal"
     level: int = 0
-    parent_id: Optional[str] = None
+    parent_id: str | None = None
     child_ids: list[str] = field(default_factory=list)
     type: NodeType = NodeType.TEXT
     summary_text: str = ""
     raw_content: str = ""
-    media_path: Optional[str] = None
+    media_path: str | None = None
     timestamp: float = field(default_factory=now_ts)
-    occurred_at: Optional[float] = None
+    occurred_at: float | None = None
     ingested_at: float = field(default_factory=now_ts)
     position_in_history: int = 0
-    timeframe_start: Optional[float] = None
-    timeframe_end: Optional[float] = None
+    timeframe_start: float | None = None
+    timeframe_end: float | None = None
     tags: list[str] = field(default_factory=list)
     status: NodeStatus = NodeStatus.ACTIVE
     annotations: list[TemporalAnnotation] = field(default_factory=list)
     retrieval_count: int = 0
     # Assistant chain-of-thought, kept so the UI can show it after a reload.
     # Display-only: never included in prompts or summaries.
-    reasoning: Optional[str] = None
+    reasoning: str | None = None
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -105,7 +104,7 @@ class MemoryNode:
         return d
 
     @staticmethod
-    def from_dict(d: dict) -> "MemoryNode":
+    def from_dict(d: dict) -> MemoryNode:
         d = dict(d)
         d["type"] = NodeType(d.get("type", "text"))
         d["status"] = NodeStatus(d.get("status", "active"))
@@ -119,7 +118,7 @@ class MemoryNode:
         return json.dumps(self.to_dict(), ensure_ascii=False)
 
     @staticmethod
-    def from_json(s: str) -> "MemoryNode":
+    def from_json(s: str) -> MemoryNode:
         return MemoryNode.from_dict(json.loads(s))
 
 
@@ -145,7 +144,7 @@ class MemoryFilter:
         return asdict(self)
 
     @staticmethod
-    def from_dict(d: dict) -> "MemoryFilter":
+    def from_dict(d: dict) -> MemoryFilter:
         return MemoryFilter(**d)
 
 
@@ -202,7 +201,7 @@ class Persona:
         return d
 
     @staticmethod
-    def from_dict(d: dict) -> "Persona":
+    def from_dict(d: dict) -> Persona:
         d = dict(d)
         mf = d.get("memory_filter", {})
         d["memory_filter"] = MemoryFilter.from_dict(mf) if isinstance(mf, dict) else mf
@@ -216,16 +215,16 @@ class SelfGeneratedRule:
     id: str = field(default_factory=new_id)
     type: str = "self_generated_rule"
     scope: RuleScope = RuleScope.GLOBAL
-    persona_id: Optional[str] = None
-    space_id: Optional[str] = None
+    persona_id: str | None = None
+    space_id: str | None = None
     trigger_context: str = ""
     rule_text: str = ""
     confidence: float = 0.5
     derived_from: list[str] = field(default_factory=list)  # source node ids
     status: RuleStatus = RuleStatus.DRAFT
     created_at: float = field(default_factory=now_ts)
-    validated_at: Optional[float] = None
-    last_reviewed_at: Optional[float] = None
+    validated_at: float | None = None
+    last_reviewed_at: float | None = None
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -234,7 +233,7 @@ class SelfGeneratedRule:
         return d
 
     @staticmethod
-    def from_dict(d: dict) -> "SelfGeneratedRule":
+    def from_dict(d: dict) -> SelfGeneratedRule:
         d = dict(d)
         d["scope"] = RuleScope(d.get("scope", "global"))
         d["status"] = RuleStatus(d.get("status", "draft"))

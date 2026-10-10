@@ -15,18 +15,14 @@ import re
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 
 _log = logging.getLogger(__name__)
 
 MAX_RUNS_KEPT = 30
 MAX_REPLY_CHARS = 4000
 _SPACE_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
-
-
-def services_enabled() -> bool:
-    return os.environ.get("PAI_SERVICES", "1") != "0"
 
 
 class ServiceStore:
@@ -76,7 +72,7 @@ class ServiceStore:
             try:
                 interval = int(fields.get("interval_minutes", 60))
             except (TypeError, ValueError):
-                raise ValueError("interval_minutes: целое число минут")
+                raise ValueError("interval_minutes: целое число минут") from None
             if not 1 <= interval <= 10080:
                 raise ValueError("interval_minutes: от 1 до 10080 (неделя)")
             out["interval_minutes"] = interval
@@ -93,7 +89,7 @@ class ServiceStore:
         with self._lock:
             return [dict(s, runs=list(s.get("runs", []))) for s in self._items]
 
-    def get(self, sid: str) -> Optional[dict]:
+    def get(self, sid: str) -> dict | None:
         with self._lock:
             for s in self._items:
                 if s["id"] == sid:
@@ -111,7 +107,7 @@ class ServiceStore:
             self._save()
         return dict(item, runs=[])
 
-    def update(self, sid: str, fields: dict, now: float) -> Optional[dict]:
+    def update(self, sid: str, fields: dict, now: float) -> dict | None:
         data = self._validate(fields, partial=True)
         with self._lock:
             for s in self._items:
@@ -157,7 +153,7 @@ class ServiceRunner:
         self._running: set[str] = set()
         self._guard = threading.Lock()
         self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
 
     def start(self) -> None:
         if self._thread is None:
@@ -187,7 +183,7 @@ class ServiceRunner:
                     started.append(t)
         return started
 
-    def start_run(self, sid: str) -> Optional[threading.Thread]:
+    def start_run(self, sid: str) -> threading.Thread | None:
         with self._guard:
             if sid in self._running:
                 return None
@@ -206,7 +202,7 @@ class ServiceRunner:
                 result = self.execute(svc)
                 run = {"ok": True, "reply": str(result.get("reply", ""))[:MAX_REPLY_CHARS]}
             except Exception as e:
-                _log.warning("service %s failed: %s", sid, e)
+                _log.exception("service %s failed: %s", sid, e)
                 run = {"ok": False, "error": f"{type(e).__name__}: {e}"[:1000]}
             finished_at = time.time()
             run.update(started_at=started_at, finished_at=finished_at,

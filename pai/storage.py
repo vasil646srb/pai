@@ -12,10 +12,8 @@ import os
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Iterable, Optional
 
-from .models import MemoryNode, NodeStatus, NodeType
-
+from .models import MemoryNode, NodeStatus
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS nodes (
@@ -216,7 +214,7 @@ class Storage:
         }
         return MemoryNode.from_dict(d)
 
-    def get_fragment(self, node_id: str, record_retrieval: bool = True) -> Optional[MemoryNode]:
+    def get_fragment(self, node_id: str, record_retrieval: bool = True) -> MemoryNode | None:
         """Exact retrieval by ID — the primary memory-access mechanism."""
         with self._lock:
             row = self._conn.execute("SELECT * FROM nodes WHERE id=?", (node_id,)).fetchone()
@@ -240,7 +238,7 @@ class Storage:
             return [self._row_to_node(r) for r in rows]
 
     def get_by_level(
-        self, level: int, space_id: Optional[str] = None, statuses: Optional[list[str]] = None
+        self, level: int, space_id: str | None = None, statuses: list[str] | None = None
     ) -> list[MemoryNode]:
         with self._lock:
             q = "SELECT * FROM nodes WHERE level=?"
@@ -275,7 +273,7 @@ class Storage:
             nodes.reverse()
             return nodes
 
-    def get_roots(self, space_id: Optional[str] = None, min_level: int = 0) -> list[MemoryNode]:
+    def get_roots(self, space_id: str | None = None, min_level: int = 0) -> list[MemoryNode]:
         """Nodes with no parent — tops of the tree."""
         with self._lock:
             q = "SELECT * FROM nodes WHERE parent_id IS NULL AND level >= ?"
@@ -287,7 +285,7 @@ class Storage:
             rows = self._conn.execute(q, params).fetchall()
             return [self._row_to_node(r) for r in rows]
 
-    def get_max_level(self, space_id: Optional[str] = None) -> int:
+    def get_max_level(self, space_id: str | None = None) -> int:
         with self._lock:
             q = "SELECT MAX(level) AS m FROM nodes"
             params: list = []
@@ -297,7 +295,7 @@ class Storage:
             row = self._conn.execute(q, params).fetchone()
             return row["m"] if row and row["m"] is not None else -1
 
-    def count_nodes(self, space_id: Optional[str] = None) -> int:
+    def count_nodes(self, space_id: str | None = None) -> int:
         with self._lock:
             q = "SELECT COUNT(*) AS c FROM nodes"
             params: list = []
@@ -310,9 +308,9 @@ class Storage:
     def search_archive(
         self,
         query: str,
-        space_id: Optional[str] = None,
-        date_from: Optional[float] = None,
-        date_to: Optional[float] = None,
+        space_id: str | None = None,
+        date_from: float | None = None,
+        date_to: float | None = None,
         limit: int = 10,
     ) -> list[dict]:
         """Auxiliary full-text search. Returns candidate id + snippet only —
@@ -371,7 +369,7 @@ class Storage:
         return " OR ".join(safe_terms)
 
     def list_fragments_by_timeframe(
-        self, date_from: float, date_to: float, space_id: Optional[str] = None
+        self, date_from: float, date_to: float, space_id: str | None = None
     ) -> list[MemoryNode]:
         with self._lock:
             q = (
@@ -426,8 +424,8 @@ class Storage:
 
     def log_action(
         self, kind: str, name: str, request: object, *,
-        space_id: Optional[str] = None, response: object = None,
-        latency_seconds: Optional[float] = None, error: Optional[str] = None,
+        space_id: str | None = None, response: object = None,
+        latency_seconds: float | None = None, error: str | None = None,
     ) -> int:
         with self._lock:
             import time as _time
@@ -452,7 +450,7 @@ class Storage:
             return cur.lastrowid
 
     def get_action_log(
-        self, limit: int = 200, kind: Optional[str] = None, space_id: Optional[str] = None,
+        self, limit: int = 200, kind: str | None = None, space_id: str | None = None,
     ) -> list[dict]:
         with self._lock:
             query = "SELECT * FROM action_log"
@@ -552,7 +550,7 @@ class Storage:
             self._conn.commit()
             if not self.wal_path.exists():
                 return 0
-            with open(self.wal_path, "r", encoding="utf-8") as f:
+            with open(self.wal_path, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line:

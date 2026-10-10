@@ -28,7 +28,6 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Optional
 
 # We want to keep at least this fraction of the cache free for the next
 # turn. Compression pressure ramps up as usage approaches (1 - this).
@@ -64,9 +63,9 @@ class CacheMonitor:
 
     def __init__(
         self,
-        metrics_url: Optional[str] = None,
+        metrics_url: str | None = None,
         timeout: float = 2.0,
-        known_context_length: Optional[int] = None,
+        known_context_length: int | None = None,
         target_free_ratio: float = TARGET_FREE_RATIO,
     ):
         # metrics_url is the vLLM base (same host as PAI_LLM_BASE_URL,
@@ -77,14 +76,14 @@ class CacheMonitor:
         # Real context window of the active model, if known (e.g. fetched
         # once at startup from OpenRouter's GET /models). None means "use
         # the persona's configured budget instead" (local_estimate).
-        self.known_context_length: Optional[int] = known_context_length
+        self.known_context_length: int | None = known_context_length
         # Fraction of the cache we want to keep free. Compression starts
         # (pressure >= 1) once usage crosses (1 - target_free_ratio) — i.e.
         # this is derived from the user's compression_trigger_pct setting:
         # target_free_ratio = 1 - trigger_pct / 100.
         self.target_free_ratio = max(0.0, min(1.0, target_free_ratio))
         self._last_check_ts = 0.0
-        self._last_reading: Optional[CacheReading] = None
+        self._last_reading: CacheReading | None = None
 
     @staticmethod
     def _derive_metrics_url(base_url: str) -> str:
@@ -95,7 +94,7 @@ class CacheMonitor:
             root = root[: -len("/v1")]
         return root + "/metrics"
 
-    def _fetch_vllm_usage(self) -> Optional[float]:
+    def _fetch_vllm_usage(self) -> float | None:
         if not self.metrics_url:
             return None
         now = time.time()
@@ -120,8 +119,8 @@ class CacheMonitor:
 
     def read(
         self,
-        local_estimate_ratio: Optional[float] = None,
-        live_context_tokens: Optional[int] = None,
+        local_estimate_ratio: float | None = None,
+        live_context_tokens: int | None = None,
     ) -> CacheReading:
         """Return the best available reading, trying sources in order:
         1) real vLLM metrics, 2) live_context_tokens / known_context_length

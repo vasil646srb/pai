@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 
 @dataclass
@@ -54,7 +53,7 @@ _MONTHS_AGO_EN = re.compile(r"\b(\d+)\s+months?\s+ago\b", re.IGNORECASE)
 @dataclass
 class ResolvedDate:
     raw_phrase: str
-    resolved_date: Optional[str]  # ISO date, or None if not resolvable
+    resolved_date: str | None  # ISO date, or None if not resolvable
     confidence: str  # low | medium | high
 
 
@@ -110,7 +109,7 @@ def normalize_relative_dates(text: str, reference: datetime) -> list[ResolvedDat
     return results
 
 
-def calculate_time_delta(date1: str, date2: str, reference_now: Optional[datetime] = None) -> dict:
+def calculate_time_delta(date1: str, date2: str, reference_now: datetime | None = None) -> dict:
     """Tool: compute the delta between two dates/timestamps.
     Accepts ISO date/datetime strings, or the literal 'now'."""
     ref = reference_now or datetime.now(timezone.utc)

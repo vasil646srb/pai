@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient
 from pai.app import create_app
 from pai.custom_functions import CustomFunctionRegistry
 from pai.llm import MockLLM
-from pai.models import Persona
 from pai.personas import PersonaRegistry, default_personas
 from pai.skills import default_skill_catalog
 from pai.tools import ToolDispatcher

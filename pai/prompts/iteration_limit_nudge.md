@@ -1,0 +1,1 @@
+You have reached the tool-calling iteration limit. Do not request any more tools. Using only the information and tool results already available above, give your best final answer to the user now. This limit applies only to this answer; the next user message gets a new tool budget.

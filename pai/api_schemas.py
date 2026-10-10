@@ -2,7 +2,7 @@
 (dataclasses) so the storage layer stays framework-agnostic."""
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -11,7 +11,7 @@ class ChatRequest(BaseModel):
     text: str
     persona_id: str = "brain"
     space_id: str = "personal"
-    reference_now: Optional[str] = None
+    reference_now: str | None = None
     images: list[str] = Field(default_factory=list)
 
 
@@ -23,25 +23,25 @@ class ToolTraceItem(BaseModel):
 
 class ChatResponse(BaseModel):
     reply: str
-    reasoning: Optional[str] = None
+    reasoning: str | None = None
     tool_trace: list[ToolTraceItem]
     live_context_preview: dict
     usage: dict
-    cache_status: Optional[dict] = None
+    cache_status: dict | None = None
 
 
 class NodeOut(BaseModel):
     id: str
     space_id: str
     level: int
-    parent_id: Optional[str]
+    parent_id: str | None
     child_ids: list[str]
     type: str
     summary_text: str
     raw_content: str
-    occurred_at: Optional[float]
-    timeframe_start: Optional[float]
-    timeframe_end: Optional[float]
+    occurred_at: float | None
+    timeframe_start: float | None
+    timeframe_end: float | None
     tags: list[str]
     status: str
     retrieval_count: int
@@ -49,15 +49,15 @@ class NodeOut(BaseModel):
 
 
 class BudgetProfileUpdate(BaseModel):
-    system_core: Optional[int] = Field(default=None, ge=0)
-    persona_header: Optional[int] = Field(default=None, ge=0)
-    current_time: Optional[int] = Field(default=None, ge=0)
-    skill_triggers: Optional[int] = Field(default=None, ge=0)
-    tree_tops: Optional[int] = Field(default=None, ge=0)
-    tail: Optional[int] = Field(default=None, ge=0)
-    retrieved_fragments: Optional[int] = Field(default=None, ge=0)
-    reasoning_reserve: Optional[int] = Field(default=None, ge=0)
-    total_budget: Optional[int] = Field(default=None, ge=1)
+    system_core: int | None = Field(default=None, ge=0)
+    persona_header: int | None = Field(default=None, ge=0)
+    current_time: int | None = Field(default=None, ge=0)
+    skill_triggers: int | None = Field(default=None, ge=0)
+    tree_tops: int | None = Field(default=None, ge=0)
+    tail: int | None = Field(default=None, ge=0)
+    retrieved_fragments: int | None = Field(default=None, ge=0)
+    reasoning_reserve: int | None = Field(default=None, ge=0)
+    total_budget: int | None = Field(default=None, ge=1)
 
 
 class PersonaOut(BaseModel):
@@ -72,7 +72,7 @@ class PersonaOut(BaseModel):
     deny_tags: list[str] = Field(default_factory=list)
     tone: str
     tool_permissions: list[str]
-    budget_profile: Optional[BudgetProfileUpdate] = None
+    budget_profile: BudgetProfileUpdate | None = None
 
 
 class PersonaCreate(BaseModel):
@@ -97,24 +97,24 @@ class PersonaToolsUpdate(BaseModel):
 
 class PersonaUpdate(BaseModel):
     """Partial update of a persona's settings. Any field left as None is unchanged."""
-    name: Optional[str] = None
-    description: Optional[str] = None
-    system_core_addon: Optional[str] = None
-    active_skill_ids: Optional[list[str]] = None
-    allow_spaces: Optional[list[str]] = None
-    deny_spaces: Optional[list[str]] = None
-    allow_tags: Optional[list[str]] = None
-    deny_tags: Optional[list[str]] = None
-    tool_permissions: Optional[list[str]] = None
-    tone: Optional[str] = None
-    budget_profile: Optional[BudgetProfileUpdate] = None
+    name: str | None = None
+    description: str | None = None
+    system_core_addon: str | None = None
+    active_skill_ids: list[str] | None = None
+    allow_spaces: list[str] | None = None
+    deny_spaces: list[str] | None = None
+    allow_tags: list[str] | None = None
+    deny_tags: list[str] | None = None
+    tool_permissions: list[str] | None = None
+    tone: str | None = None
+    budget_profile: BudgetProfileUpdate | None = None
 
 
 class RuleCreate(BaseModel):
     rule_text: str
     scope: str = "global"
-    persona_id: Optional[str] = None
-    space_id: Optional[str] = None
+    persona_id: str | None = None
+    space_id: str | None = None
     trigger_context: str = ""
     confidence: float = 0.5
 
@@ -122,14 +122,14 @@ class RuleCreate(BaseModel):
 class RuleOut(BaseModel):
     id: str
     scope: str
-    persona_id: Optional[str]
-    space_id: Optional[str]
+    persona_id: str | None
+    space_id: str | None
     trigger_context: str
     rule_text: str
     confidence: float
     status: str
     created_at: float
-    validated_at: Optional[float]
+    validated_at: float | None
 
 
 class SkillCreate(BaseModel):
@@ -148,9 +148,9 @@ class SkillOut(BaseModel):
 
 class SearchRequest(BaseModel):
     query: str
-    space_id: Optional[str] = None
-    date_from: Optional[str] = None
-    date_to: Optional[str] = None
+    space_id: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
     limit: int = 10
 
 
@@ -169,30 +169,30 @@ class NodeStatusUpdate(BaseModel):
 
 
 class LLMSettingsUpdate(BaseModel):
-    base_url: Optional[str] = None
-    api_key: Optional[str] = None
-    model: Optional[str] = None
-    summarizer_model: Optional[str] = None
-    verify_model: Optional[str] = None
-    vision_model: Optional[str] = None
-    verify_strictness: Optional[int] = Field(default=None, ge=1, le=5)
-    site_url: Optional[str] = None
-    site_name: Optional[str] = None
-    temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
-    max_tokens: Optional[int] = Field(default=None, ge=1, le=131072)
-    top_p: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    base_url: str | None = None
+    api_key: str | None = None
+    model: str | None = None
+    summarizer_model: str | None = None
+    verify_model: str | None = None
+    vision_model: str | None = None
+    verify_strictness: int | None = Field(default=None, ge=1, le=5)
+    site_url: str | None = None
+    site_name: str | None = None
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    max_tokens: int | None = Field(default=None, ge=1, le=131072)
+    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
     clear_top_p: bool = False
-    reasoning_enabled: Optional[bool] = None
-    reasoning_effort: Optional[str] = Field(default=None, pattern="^(low|medium|high)$")
+    reasoning_enabled: bool | None = None
+    reasoning_effort: str | None = Field(default=None, pattern="^(low|medium|high)$")
     # Advanced parameters
-    context_window: Optional[int] = Field(default=None, ge=1024, le=200000)
-    max_tool_iterations: Optional[int] = Field(default=None, ge=1, le=50)
-    compression_trigger_pct: Optional[int] = Field(default=None, ge=1, le=95)
-    top_k: Optional[int] = Field(default=None, ge=1)
+    context_window: int | None = Field(default=None, ge=1024, le=200000)
+    max_tool_iterations: int | None = Field(default=None, ge=1, le=50)
+    compression_trigger_pct: int | None = Field(default=None, ge=1, le=95)
+    top_k: int | None = Field(default=None, ge=1)
     clear_top_k: bool = False
-    frequency_penalty: Optional[float] = Field(default=None, ge=-2.0, le=2.0)
+    frequency_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
     clear_frequency_penalty: bool = False
-    presence_penalty: Optional[float] = Field(default=None, ge=-2.0, le=2.0)
+    presence_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
     clear_presence_penalty: bool = False
 
 
@@ -213,5 +213,5 @@ class FunctionOut(BaseModel):
     implementation: dict
     status: str
     created_at: float
-    validated_at: Optional[float]
-    activated_at: Optional[float]
+    validated_at: float | None
+    activated_at: float | None

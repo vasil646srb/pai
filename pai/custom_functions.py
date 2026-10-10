@@ -11,9 +11,9 @@ import json
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-from .models import now_ts, new_id
+from .models import new_id, now_ts
 
 
 @dataclass
@@ -26,14 +26,14 @@ class CustomFunction:
     implementation: dict[str, Any] = field(default_factory=dict)
     status: str = "draft"  # draft | validated | active | rejected | archived
     created_at: float = field(default_factory=now_ts)
-    validated_at: Optional[float] = None
-    activated_at: Optional[float] = None
+    validated_at: float | None = None
+    activated_at: float | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @staticmethod
-    def from_dict(d: dict) -> "CustomFunction":
+    def from_dict(d: dict) -> CustomFunction:
         """Load a function from persisted JSON, including legacy JSON-string fields.
 
         Older versions could persist ``implementation`` (and sometimes
@@ -57,7 +57,7 @@ class CustomFunction:
 
 
 class CustomFunctionRegistry:
-    def __init__(self, path: Optional[str | Path] = None):
+    def __init__(self, path: str | Path | None = None):
         self.path = Path(path) if path else None
         self._functions: dict[str, CustomFunction] = {}
         if self.path and self.path.exists():
@@ -66,7 +66,7 @@ class CustomFunctionRegistry:
     def all(self) -> list[CustomFunction]:
         return list(self._functions.values())
 
-    def get(self, function_id: str) -> Optional[CustomFunction]:
+    def get(self, function_id: str) -> CustomFunction | None:
         return self._functions.get(function_id)
 
     def add(self, fn: CustomFunction, *, validate: bool = True) -> CustomFunction:
@@ -178,7 +178,7 @@ class CustomFunctionRegistry:
         if changed:
             self.save()
 
-    def get_by_name(self, name: str) -> Optional[CustomFunction]:
+    def get_by_name(self, name: str) -> CustomFunction | None:
         for fn in self._functions.values():
             if fn.name == name and fn.status == "active":
                 return fn
@@ -284,12 +284,12 @@ except Exception as exc:
         if not stdout:
             raise RuntimeError(f"Python function produced no result. stderr: {proc.stderr[-4000:]}")
         marker = "@@PAI_RESULT@@"
-        lines = [l for l in stdout.strip().splitlines() if l.startswith(marker)]
+        lines = [line for line in stdout.strip().splitlines() if line.startswith(marker)]
         if not lines:
             raise RuntimeError(f"Invalid Python function output: {stdout[-4000:]}")
         try:
             data = json.loads(lines[-1][len(marker):])
-        except Exception as e:
+        except ValueError as e:
             raise RuntimeError(f"Invalid Python function output: {stdout[-4000:]}") from e
         if not data.get("ok"):
             raise RuntimeError(data.get("error", "Python function failed") + chr(10) + data.get("traceback", "")[-4000:])

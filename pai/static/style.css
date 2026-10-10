@@ -466,6 +466,7 @@ h1.page-title {
 .chat-toolbar { display: flex; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--border-soft); align-items: center; }
 .chat-toolbar select { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); padding: 6px 8px; border-radius: var(--radius-sm); font-size: 12.5px; }
 .tok-speed { font-family: var(--mono); font-size: 11px; color: var(--accent-live); min-width: 0; white-space: nowrap; }
+.tok-usage { font-family: var(--mono); font-size: 11px; color: var(--muted, var(--text)); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chat-messages { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 18px; display: flex; flex-direction: column; gap: 14px; max-width: 100%; box-sizing: border-box; }
 
 .msg { max-width: 82%; min-width: 0; overflow-wrap: break-word; word-break: break-word; }
@@ -701,6 +702,7 @@ h1.page-title {
   .chat-col-full { height: calc(var(--vvh, 100dvh) - 56px); }
   .chat-toolbar { flex-wrap: wrap; }
   .tok-speed { order: 3; width: 100%; }
+  .tok-usage { order: 4; width: 100%; }
 
   .explorer-layout {
     grid-template-columns: 1fr;
@@ -1408,3 +1410,17 @@ img, svg, video, canvas { max-width: 100%; height: auto; }
 .msg.service-event.user { align-self: flex-start; }
 .service-event-label { font-family: var(--mono); font-size: 10.5px; color: var(--accent-cold); margin-bottom: 4px; }
 .msg.service-event .bubble { background: transparent; border: none; padding: 0; }
+
+/* Token/context line in the chat toolbar: on phones it gets its own full-width row and wraps instead of being cut off. */
+@media (max-width: 720px) {
+  .chat-toolbar-body { flex-wrap: wrap !important; }
+  .chat-toolbar-body .tok-usage {
+    flex: 1 1 100%;
+    order: 4;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    font-size: 10.5px;
+    line-height: 1.4;
+  }
+}

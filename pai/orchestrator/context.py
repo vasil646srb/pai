@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 try:  # zoneinfo is stdlib on 3.9+, but tz data may be missing (Windows)
-    from zoneinfo import ZoneInfo
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 except ImportError:  # pragma: no cover
     ZoneInfo = None  # type: ignore[assignment]
 
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 class ContextBuilder:
     """Builds system prompts and context blocks from storage state."""
 
-    def __init__(self, orch: "Orchestrator"):
+    def __init__(self, orch: Orchestrator):
         self.orch = orch
         self.storage = orch.storage
         self.tree = orch.tree
@@ -33,7 +33,7 @@ class ContextBuilder:
         """Delegate unknown attributes to Orchestrator."""
         return getattr(self.orch, name)
 
-    def _build_time_context(self, reference_now: Optional[datetime] = None) -> TimeContext:
+    def _build_time_context(self, reference_now: datetime | None = None) -> TimeContext:
         """Wall-clock context in the user's timezone (PAI_TIMEZONE / the
         `timezone_name` setting; falls back to the machine's local zone).
         Previously the UTC time was printed under the label of the configured
@@ -46,7 +46,7 @@ class ContextBuilder:
         if name and name.upper() != "UTC" and ZoneInfo is not None:
             try:
                 tz = ZoneInfo(name)
-            except Exception:
+            except (ZoneInfoNotFoundError, ValueError):
                 tz = None
         if tz is not None:
             now = now.astimezone(tz)
@@ -57,11 +57,12 @@ class ContextBuilder:
             name = now.tzname() or name or "local"
         return TimeContext(now=now, timezone_name=name or "UTC")
 
-    def _tail_nodes(self, space_id: str, persona: Optional[Persona] = None):
+    def _tail_nodes(self, space_id: str, persona: Persona | None = None):
         """Last `tail_length` dialogue nodes (tool/skill results excluded —
         they are internal state, not conversation), honoring the persona's
         memory filter (deny_tags etc.)."""
         recent = self.storage.get_recent_level0(space_id, limit=self.tail_length * 3)
+        recent = [n for n in recent if "notice" not in (n.tags or [])]
         if persona is not None:
             recent = [n for n in recent if persona.memory_filter.permits(n.space_id, n.tags)]
         return recent[-self.tail_length:]
@@ -73,7 +74,7 @@ class ContextBuilder:
             return "Assistant"
         return "User"
 
-    def _tail_block(self, space_id: str, persona: Optional[Persona] = None, budget_tokens: Optional[int] = None) -> str:
+    def _tail_block(self, space_id: str, persona: Persona | None = None, budget_tokens: int | None = None) -> str:
         recent = self._tail_nodes(space_id, persona)
         local_tz = self._build_time_context().now.tzinfo or timezone.utc
         lines = []
@@ -106,7 +107,7 @@ class ContextBuilder:
             kept.reverse()
         return kept
 
-    def _tree_tops_block(self, space_id: str, max_nodes: int = 8, budget_tokens: Optional[int] = None) -> str:
+    def _tree_tops_block(self, space_id: str, max_nodes: int = 8, budget_tokens: int | None = None) -> str:
         tops = self.tree.get_tree_tops(space_id=space_id, max_nodes=max_nodes, min_level=1)
         lines = []
         for n in tops:
@@ -122,7 +123,7 @@ class ContextBuilder:
 
 
     def build_system_segments(
-        self, persona: Persona, space_id: str, reference_now: Optional[datetime] = None
+        self, persona: Persona, space_id: str, reference_now: datetime | None = None
     ) -> list[dict]:
         """System prompt as labelled segments. Single source of truth: the
         final prompt is "\\n\\n".join(seg["text"]) — the log breakdown is
@@ -182,7 +183,7 @@ class ContextBuilder:
         return segs
 
     def build_system_prompt(
-        self, persona: Persona, space_id: str, reference_now: Optional[datetime] = None
+        self, persona: Persona, space_id: str, reference_now: datetime | None = None
     ) -> str:
         segs = self.build_system_segments(persona, space_id, reference_now)
         return "\n\n".join(sg["text"] for sg in segs)

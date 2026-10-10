@@ -25,6 +25,7 @@
     <span class="stack-label" id="headerStackLabel">— узлов</span>
     <div class="topbar-spacer"></div>
     <select class="persona-select" id="chatPersona" title="Активная персона"></select>
+    <select class="persona-select" id="chatSpace" title="Пространство памяти персоны"></select>
 
     <button class="header-stats-btn" id="statsToggle" type="button" title="Статистика текущего ответа">
       <span class="ico">📊</span>
@@ -62,6 +63,7 @@
         <div class="chat-toolbar" id="chatToolbar">
           <button class="btn sm" id="chatToolbarToggle" title="Свернуть/развернуть панель">▾</button>
           <div class="chat-toolbar-body" id="chatToolbarBody">            <span class="tok-speed" id="tokSpeed"></span>
+            <span class="tok-usage" id="chatTokUsage" title="Окно контекста; токены последнего ответа (↑ отправлено, ↓ получено) и суммарно за сессию страницы">—</span>
             <label class="reasoning-toggle" title="Скрыть блоки вызова функций/инструментов в чате">
               <input type="checkbox" id="hideToolCalls" />
               Скрыть функции

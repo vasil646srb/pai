@@ -285,9 +285,38 @@ function chatSpaceFor(personaId) {
   if (allow.includes("personal") && !deny.includes("personal")) return "personal";
   return allow.find((sp) => !deny.includes(sp)) || "personal";
 }
+// The memory space the chat talks to. Chosen in #chatSpace; the choice is remembered per persona
+// in this browser only (a per-viewer convenience). The server still enforces allow/deny lists.
 function currentChatSpace() {
-  const sel = document.getElementById("chatPersona");
-  return chatSpaceFor((sel && sel.value) || "brain");
+  const sel = document.getElementById("chatSpace");
+  if (sel && sel.value) return sel.value;
+  return chatSpaceFor(document.getElementById("chatPersona").value || "brain");
+}
+
+const chatSpaceKey = (personaId) => `pai.chatSpace.${personaId}`;
+
+async function populateChatSpaces() {
+  const sel = document.getElementById("chatSpace");
+  if (!sel) return;
+  const persona_id = document.getElementById("chatPersona").value || "brain";
+  const p = personasCache.find((x) => x.persona_id === persona_id);
+  const allow = (p && p.allow_spaces) || [];
+  const deny = (p && p.deny_spaces) || [];
+  let options;
+  if (allow.length) {
+    options = allow.filter((sp) => !deny.includes(sp));
+  } else {
+    // unrestricted persona: any space that exists in memory is available
+    let known = [];
+    try { known = Object.keys(await api("/spaces")); } catch (_) { known = []; }
+    options = ["personal", ...known].filter((sp, i, a) => a.indexOf(sp) === i && !deny.includes(sp));
+  }
+  let preferred = null;
+  try { preferred = localStorage.getItem(chatSpaceKey(persona_id)); } catch (_) { /* storage unavailable */ }
+  const value = (preferred && options.includes(preferred)) ? preferred : chatSpaceFor(persona_id);
+  if (!options.includes(value)) options.unshift(value);
+  sel.innerHTML = options.map((sp) => `<option value="${esc(sp)}">${esc(sp)}</option>`).join("");
+  sel.value = value;
 }
 
 async function loadPersonasForChat() {
@@ -302,6 +331,7 @@ async function loadPersonasForChat() {
   sel.innerHTML = personasCache.map((p) => `<option value="${esc(p.persona_id)}">${esc(p.name)}</option>`).join("");
   if (prev && personasCache.some((p) => p.persona_id === prev)) sel.value = prev;
   updatePersonaMenuLabel();
+  await populateChatSpaces();
 }
 
 function updatePersonaMenuLabel() {
@@ -361,7 +391,9 @@ function renderQuickReplies(list) {
   box.hidden = box.children.length === 0;
 }
 
-function appendMessage(role, text, meta, attachments, reasoning) {
+// opts.scroll (default true): scroll the chat to the bottom after appending.
+// Streamed assistant answers pass scroll:false so the reader keeps their place in the history.
+function appendMessage(role, text, meta, attachments, reasoning, opts = {}) {
   const wrap = document.getElementById("chatMessages");
   const empty = wrap.querySelector(".empty-state");
   if (empty) empty.remove();
@@ -410,7 +442,7 @@ function appendMessage(role, text, meta, attachments, reasoning) {
 
   attachCopyButton(div, () => text);
   wrap.appendChild(div);
-  wrap.scrollTop = wrap.scrollHeight;
+  if (opts.scroll !== false) wrap.scrollTop = wrap.scrollHeight;
   return div;
 }
 
@@ -683,6 +715,26 @@ function setTokSpeed(text) {
   if (el) el.textContent = text || "";
 }
 
+// Session totals live in memory for this page load only (not persisted).
+const sessionTokenUsage = { input: 0, output: 0, contextWindow: null };
+
+function renderChatTokUsage(turn, preview) {
+  const el = document.getElementById("chatTokUsage");
+  if (!el) return;
+  if (turn) {
+    sessionTokenUsage.input += Number(turn.input_tokens || 0);
+    sessionTokenUsage.output += Number(turn.output_tokens || 0);
+  }
+  const ctx = (turn && turn.context_length) || (preview && preview.context_window) || sessionTokenUsage.contextWindow;
+  if (ctx) sessionTokenUsage.contextWindow = Number(ctx);
+  const win = sessionTokenUsage.contextWindow ? fmtChatNum(sessionTokenUsage.contextWindow) : "—";
+  const last = turn
+    ? `ответ ↑${fmtChatNum(turn.input_tokens)} ↓${fmtChatNum(turn.output_tokens)}`
+    : "ответ —";
+  const total = `сессия ↑${fmtChatNum(sessionTokenUsage.input)} ↓${fmtChatNum(sessionTokenUsage.output)}`;
+  el.textContent = `окно ${win} · ${last} · ${total}`;
+}
+
 // rough token estimate for live speed display (chars/4 ~ tokens, matches
 // backend's estimate_tokens heuristic closely enough for a live readout)
 function estTokens(s) {
@@ -827,11 +879,11 @@ async function sendChat(override) {
   if (!text && !pendingAttachments.length) return;
   renderQuickReplies([]);
   const persona_id = document.getElementById("chatPersona").value || "brain";
-  const space_id = chatSpaceFor(persona_id);
+  const space_id = currentChatSpace();
   const images = pendingAttachments.slice();
 
   appendMessage(
-    "user", text, `${persona_id} · ${space_id} · ${new Date().toLocaleTimeString()}`, images,
+    "user", text, `${persona_id} · ${space_id} · ${fmtTs(Date.now() / 1000)}`, images,
   );
   if (!fromQuick) {
     input.value = "";
@@ -861,7 +913,7 @@ async function sendChat(override) {
 
   function ensureAssistantDiv() {
     if (!assistantDiv) {
-      assistantDiv = appendMessage("assistant", "", `${persona_id} · печатает…`);
+      assistantDiv = appendMessage("assistant", "", `${persona_id} · печатает…`, null, null, { scroll: false });
       assistantDiv.classList.add("streaming");
       mdEl = assistantDiv.querySelector(".md");
     }
@@ -884,7 +936,7 @@ async function sendChat(override) {
     return toolTraceEl;
   }
 
-  assistantDiv = appendMessage("assistant", "", `${persona_id} · печатает…`);
+  assistantDiv = appendMessage("assistant", "", `${persona_id} · печатает…`, null, null, { scroll: false });
     assistantDiv.classList.add("streaming");
     mdEl = assistantDiv.querySelector(".md");
   try {
@@ -995,8 +1047,6 @@ async function sendChat(override) {
           chunkCount++;
           fullText += evt.text;
           mdEl.innerHTML = renderMarkdown(fullText);
-          const wrap = document.getElementById("chatMessages");
-          wrap.scrollTop = wrap.scrollHeight;
 
           if (firstChunkAt !== null && lastChunkAt > firstChunkAt) {
             const elapsedS = (lastChunkAt - firstChunkAt) / 1000;
@@ -1018,6 +1068,7 @@ async function sendChat(override) {
         if (evt.type === "done") {
           finalPreview = evt.live_context_preview;
           if (evt.turn_usage) renderChatUsage(evt.turn_usage, finalPreview, chatFirstTokenAt != null ? (chatFirstTokenAt - chatTurnStartedAt) / 1000 : null);
+          renderChatTokUsage(evt.turn_usage || null, finalPreview);
           if (evt.cache_status) finalCacheStatus = evt.cache_status;
           if (evt.reply) fullText = evt.reply;  // authoritative final text
           if (evt.verification) finalVerification = evt.verification;
@@ -1055,6 +1106,7 @@ async function sendChat(override) {
     chatHistory.push({ role: "assistant", tool_trace: finalTrace });
     if (finalPreview) renderBudget(finalPreview);
     if (finalPreview && !document.getElementById("cuInput")?.textContent) renderChatUsage(null, finalPreview, null);
+    if (finalPreview) renderChatTokUsage(null, finalPreview);
     if (finalCacheStatus) renderCacheStatus(finalCacheStatus);
     refreshHeaderStack();
   } catch (e) {
@@ -1097,7 +1149,7 @@ document.getElementById("chatInput").addEventListener("input", (e) => {
 let historyLoadToken = 0;
 async function loadChatHistory() {
   const persona_id = document.getElementById("chatPersona").value || "brain";
-  const space_id = chatSpaceFor(persona_id);
+  const space_id = currentChatSpace();
   const myToken = ++historyLoadToken;
   const wrap = document.getElementById("chatMessages");
   wrap.innerHTML = `<div class="empty-state">Загрузка истории…</div>`;
@@ -1128,7 +1180,15 @@ async function loadChatHistory() {
     wrap.innerHTML = `<div class="empty-state">Не удалось загрузить историю: ${esc(e.message)}</div>`;
   }
 }
-document.getElementById("chatPersona").addEventListener("change", () => { updatePersonaMenuLabel(); loadChatHistory(); });
+document.getElementById("chatPersona").addEventListener("change", () => {
+  updatePersonaMenuLabel();
+  populateChatSpaces().then(loadChatHistory);
+});
+document.getElementById("chatSpace").addEventListener("change", (e) => {
+  const persona_id = document.getElementById("chatPersona").value || "brain";
+  try { localStorage.setItem(chatSpaceKey(persona_id), e.target.value); } catch (_) { /* storage unavailable */ }
+  loadChatHistory();
+});
 
 /* ===================== OVERVIEW ===================== */
 

@@ -6,7 +6,6 @@ from fastapi.testclient import TestClient
 from pai.app import create_app
 from pai.llm import MockLLM
 
-
 IMG = "data:image/png;base64,AAAA"
 
 
@@ -63,8 +62,8 @@ def test_failed_vision_falls_back_to_main_with_images():
 
 
 def test_vision_setting_persists_and_defaults_empty():
+
     from pai.llm_config import LLMConfig, LLMConfigStore
-    import pathlib
     d = tempfile.mkdtemp()
     assert LLMConfig(model="m").effective_vision_model() == ""
     store = LLMConfigStore(d)

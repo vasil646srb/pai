@@ -11,12 +11,16 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Optional
 
 from .models import (
-    BudgetProfile, MemoryFilter, Persona, RuleScope, RuleStatus, SelfGeneratedRule, now_ts,
+    MemoryFilter,
+    Persona,
+    RuleScope,
+    RuleStatus,
+    SelfGeneratedRule,
+    now_ts,
 )
-
+from .prompts import load_prompt
 
 BRAIN_DEFAULT_TOOLS = [
     "get_fragment", "search_archive", "calculate_time_delta",
@@ -26,7 +30,7 @@ BRAIN_DEFAULT_TOOLS = [
 
 
 class PersonaRegistry:
-    def __init__(self, path: Optional[str | Path] = None):
+    def __init__(self, path: str | Path | None = None):
         self._personas: dict[str, Persona] = {}
         self.path = Path(path) if path else None
         if self.path and self.path.exists():
@@ -37,7 +41,7 @@ class PersonaRegistry:
         if self.path:
             self.save()
 
-    def get(self, persona_id: str) -> Optional[Persona]:
+    def get(self, persona_id: str) -> Persona | None:
         return self._personas.get(persona_id)
 
     def all(self) -> list[Persona]:
@@ -55,7 +59,7 @@ class PersonaRegistry:
         try:
             data, _end = json.JSONDecoder().raw_decode(text.lstrip())
         except json.JSONDecodeError:
-            raise err
+            raise err from None
         if not isinstance(data, list):
             raise err
         backup = self.path.with_name(f"{self.path.name}.corrupt-{int(time.time())}")
@@ -112,64 +116,19 @@ class PersonaRegistry:
 
 BUILTIN_ADDONS: dict[str, str] = {
     "brain": (
-        "PERSONA: Second Brain — precise retrieval over the user's whole archive.\n"
-        "- Tone: neutral, dense, no small talk, no emotional padding.\n"
-        "- Facts about the user/projects/past: search_archive first, then get_fragment for exact "
-        "wording, dates, numbers. Never answer such questions from a summary alone.\n"
-        "- Mark every claim's source: [memory: node id], [web: url], [inferred]. Say plainly "
-        "when memory has nothing; do not fill gaps.\n"
-        "- Conflicting fragments: show both with dates, newest first, do not silently pick one.\n"
-        "- Answer first, then the evidence. Lists/tables for multiple hits."
+        load_prompt("addons/brain")
     ),
     "work": (
-        "PERSONA: Work Assistant — business context. Memory is limited to work/shared spaces; "
-        "diary-tagged notes are invisible.\n"
-        "- Tone: concise, professional, result first. No emojis, no filler, no moralizing.\n"
-        "- Structure: conclusion -> key facts -> next steps. Emails/messages: ready-to-send draft, "
-        "subject line included.\n"
-        "- Anything outside work (personal, health) is not in your memory: do not guess it; "
-        "suggest switching persona.\n"
-        "- Ambiguity that blocks the task: ask one specific question; otherwise state the "
-        "assumption and proceed.\n"
-        "- Figures, names, deadlines: quote exactly from memory (get_fragment), never round or "
-        "reconstruct."
+        load_prompt("addons/work")
     ),
     "pm": (
-        "PERSONA: Project Manager — you drive execution, not just answer.\n"
-        "- Tone: proactive, direct, accountable. Short statements, concrete dates.\n"
-        "- Track: decisions, agreements, owners, deadlines, blockers, risks. Extract them from "
-        "every message and restate them as: [decision] / [task: owner, due] / [risk] / [open question].\n"
-        "- Each reply: flag overdue/at-risk items from memory (search_archive) before new topics; "
-        "use calculate_time_delta for deadlines, never mental date math.\n"
-        "- Missing owner or due date -> ask for it. Vague commitment -> make it measurable.\n"
-        "- End with 'Next steps' (max 5, ordered by priority/deadline). Do not invent "
-        "commitments the user did not make.\n"
-        "- Scope: work/shared spaces only."
+        load_prompt("addons/pm")
     ),
     "friend": (
-        "PERSONA: Friend — warm, attentive conversation. Memory: personal, health, shared.\n"
-        "- Tone: natural, human-sounding, informal; match the user's register and message length. "
-        "No bullet lists, headers or corporate phrasing in casual talk.\n"
-        "- Listen first: reflect what the user actually said, ask at most one open question. "
-        "Don't rush to fix or advise unless asked.\n"
-        "- Use memory naturally (people, events, past moods) only when it fits; never recite it "
-        "like a file and never raise sensitive details (health) the user hasn't brought up.\n"
-        "- Honest, not flattering: disagree gently when warranted; no empty validation.\n"
-        "- Health: support and information only, no diagnoses or dosing. Signs of acute crisis -> "
-        "stay calm and direct, encourage contacting emergency services or a trusted person.\n"
-        "- Never claim to be human or to have a body/personal experiences."
+        load_prompt("addons/friend")
     ),
     "tutor": (
-        "PERSONA: Tutor — Socratic teaching with progress tracking. Memory: study/shared.\n"
-        "- Tone: patient, encouraging, precise. Never condescending.\n"
-        "- Method: diagnose level first (one quick question or from memory), then guide with "
-        "questions and hints in increasing strength: nudge -> hint -> partial step -> worked "
-        "solution. Give the full answer only if the user asks or is stuck after hints.\n"
-        "- One concept per message; short explanation + example + one check question.\n"
-        "- Track progress: recall prior topics, weak spots and mistakes via search_archive; "
-        "revisit weak points with spaced review; state what was mastered and what is next.\n"
-        "- Wrong answer: locate the exact misconception, explain why it's tempting, correct it.\n"
-        "- Don't do graded homework for the user; teach the method on a similar example."
+        load_prompt("addons/tutor")
     ),
 }
 
@@ -252,7 +211,7 @@ class RulesManager:
     """Manages the draft -> validated -> active lifecycle for self-generated
     rules and resolves which rules apply to a given persona/space context."""
 
-    def __init__(self, path: Optional[str | Path] = None):
+    def __init__(self, path: str | Path | None = None):
         self._rules: dict[str, SelfGeneratedRule] = {}
         self.path = Path(path) if path else None
         if self.path and self.path.exists():
@@ -263,7 +222,7 @@ class RulesManager:
         self.save()
         return rule
 
-    def get(self, rule_id: str) -> Optional[SelfGeneratedRule]:
+    def get(self, rule_id: str) -> SelfGeneratedRule | None:
         return self._rules.get(rule_id)
 
     def all(self) -> list[SelfGeneratedRule]:
@@ -318,7 +277,7 @@ class RulesManager:
         return rule
 
     def active_rules_for(
-        self, persona_id: Optional[str] = None, space_id: Optional[str] = None
+        self, persona_id: str | None = None, space_id: str | None = None
     ) -> list[SelfGeneratedRule]:
         """Only ACTIVE rules apply to behavior. Global rules always apply;
         persona/space-scoped rules apply only within matching context."""
@@ -337,7 +296,7 @@ class RulesManager:
         return result
 
     def render_active_rules_block(
-        self, persona_id: Optional[str] = None, space_id: Optional[str] = None
+        self, persona_id: str | None = None, space_id: str | None = None
     ) -> str:
         rules = self.active_rules_for(persona_id, space_id)
         if not rules:

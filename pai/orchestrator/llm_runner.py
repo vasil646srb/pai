@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import time
-from typing import Optional, TYPE_CHECKING
-
 import json
-import threading
+import time
+from typing import TYPE_CHECKING
 
-from ..llm import LLMClient, LLMError
+from ..prompts import load_prompt
 from ..usage import estimate_tokens
 
 if TYPE_CHECKING:
@@ -16,9 +14,7 @@ if TYPE_CHECKING:
 
 _ITERATION_LIMIT_FALLBACK = "I've reached my tool iteration limit. Let me give you my best answer based on what I know."
 _ITERATION_LIMIT_NUDGE = (
-    "You have reached the tool-calling iteration limit. Do not request any "
-    "more tools. Using only the information and tool results already "
-    "available above, give your best final answer to the user now."
+    load_prompt("iteration_limit_nudge")
 )
 
 
@@ -41,8 +37,8 @@ def _msg_images(m: dict) -> int:
 _IMG_TOK = 768
 
 
-def build_request_breakdown(messages: list[dict], tools, system_segments: Optional[list[dict]],
-                            phase: Optional[str]) -> dict:
+def build_request_breakdown(messages: list[dict], tools, system_segments: list[dict] | None,
+                            phase: str | None) -> dict:
     """Decompose the *actual* outgoing messages/tools into labelled parts.
     If system_segments (from ContextBuilder) are supplied and are a prefix
     of messages[0], they are reported exactly; whatever the runner appended
@@ -167,7 +163,7 @@ class LLMRunner:
     reasoning toggle, sampling params — takes effect immediately instead of
     after a restart."""
 
-    def __init__(self, orch: "Orchestrator"):
+    def __init__(self, orch: Orchestrator):
         self.orch = orch
 
     def __getattr__(self, name):
@@ -180,13 +176,13 @@ class LLMRunner:
         self,
         messages,
         tools=None,
-        space_id: Optional[str] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        top_p: Optional[float] = None,
+        space_id: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        top_p: float | None = None,
         tool_choice=None,
-        phase: Optional[str] = None,
-        system_segments: Optional[list[dict]] = None,
+        phase: str | None = None,
+        system_segments: list[dict] | None = None,
         purpose: str = "chat",
     ):
         """Generator. Streams one LLM call, forwarding ``reasoning`` and

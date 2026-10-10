@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
 
 from pai.app import create_app
-from pai.llm import MockLLM, OpenAICompatibleClient, ThinkSplitter, split_think, extract_reasoning
+from pai.llm import MockLLM, OpenAICompatibleClient, ThinkSplitter, extract_reasoning, split_think
 
 
 def _last(llm):
@@ -229,4 +229,5 @@ def test_settings_change_applies_to_runner():
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
-            fn(); print("ok", name)
+            fn()
+            print("ok", name)

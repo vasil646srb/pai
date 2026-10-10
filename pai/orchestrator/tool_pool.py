@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
-from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional, TYPE_CHECKING
+from datetime import datetime
+from typing import TYPE_CHECKING
 
-from ..llm import LLMClient
-from ..models import MemoryNode, NodeType, Persona, now_ts
-from ..tools import ToolDispatcher, ToolError
+from ..models import MemoryNode, NodeType
+from ..prompts import load_prompt
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .base import Orchestrator
@@ -30,7 +32,7 @@ class ToolPoolPlanner:
     """Plans and executes tool pools according to the protocol:
     planning → pool execution → analysis."""
 
-    def __init__(self, orch: "Orchestrator"):
+    def __init__(self, orch: Orchestrator):
         self.orch = orch
 
     def __getattr__(self, name):
@@ -77,7 +79,8 @@ class ToolPoolPlanner:
                 tool_call["name"], tool_call["arguments"], persona=persona
             )
             error = None
-        except Exception as exc:
+        except Exception as exc:  # per-call isolation: the model gets the error, the log gets the traceback
+            _log.exception("tool %s crashed", tool_call["name"])
             result = {
                 "tool_failed": True,
                 "error": str(exc),
@@ -131,47 +134,18 @@ class ToolPoolPlanner:
         catalog = self._tool_catalog_block(tool_schemas)
         if phase == "planning":
             instruction = (
-                "ORCHESTRATION PHASE — FIRST PASS.\n"
-                "Decide whether the user's task needs a tool. If it does not, answer directly. "
-                "If it does, call the planning control plan_tool_pool with ONE pool of only "
-                "independent calls. plan_tool_pool is an orchestration control, not a real tool.\n\n"
-                "PLANNING RULES:\n"
-                "1. Use the minimum reliable calls needed. Do not call tools merely because they exist.\n"
-                "2. Independent calls can share one pool and run concurrently.\n"
-                "3. A call whose arguments depend on another result must wait for the next round. "
-                "Example: web_search -> next round web_fetch for relevant URLs.\n"
-                "4. For exact stored facts, prefer get_fragment/search_archive over guessing.\n"
-                "5. For current internet facts, use web_search, then fetch every relevant result needed.\n"
-                "6. For a known API/URL, use http_request directly.\n"
-                "7. Use shell_exec only for explicit/local execution needs.\n"
-                "8. Do not repeat an identical call unless a justified retry is needed.\n"
-                "9. If no tool is needed, do not create an empty plan just to satisfy the protocol; answer directly.\n"
-                "10. ALWAYS express a plan by calling the plan_tool_pool function. Never write a plan, "
-                "JSON or the words 'Tool pool plan' as plain text in your answer.\n\n"
-                "AVAILABLE REAL TOOLS:\n" + catalog
+                load_prompt("planner_first_pass") + catalog
             )
         else:
             instruction = (
-                "ORCHESTRATION PHASE — ANALYSIS.\n"
-                "Review the original request plus ALL previous tool results. Decide whether the "
-                "evidence is sufficient. If sufficient, answer the user directly. If not, call "
-                "plan_tool_pool with exactly one next pool containing only the missing or dependent "
-                "calls. Do not call real tools directly.\n\n"
-                "IMPORTANT:\n"
-                "- Never treat a web_search snippet as verified page content. Fetch relevant URLs.\n"
-                "- Do not repeat successful calls without a concrete reason.\n"
-                "- Prefer resolving dependencies now rather than starting unrelated searches.\n"
-                "- If some sources failed, continue with successful sources and clearly mark uncertainty.\n"
-                "- Stop as soon as the evidence supports a useful answer.\n"
-                "- Express the next pool ONLY by calling plan_tool_pool; never print a plan as text. "
-                "When the evidence is sufficient, reply with the final answer in plain prose.\n\n"
-                "AVAILABLE REAL TOOLS:\n" + catalog
+                load_prompt("planner_analysis") + catalog
             )
+        instruction = instruction.replace("{max_rounds}", str(self.max_tool_iterations))
         result = [dict(m) for m in messages]
         result[0] = {"role": "system", "content": (result[0].get("content") or "") + "\n\n" + instruction}
         return result
 
-    def _extract_tool_pool(self, result: dict) -> tuple[Optional[list[dict]], Optional[str]]:
+    def _extract_tool_pool(self, result: dict) -> tuple[list[dict] | None, str | None]:
         """Return (pool, error). Supports the new plan_tool_pool call and
         legacy direct tool_calls so old MockLLM/tests remain compatible."""
         calls = result.get("tool_calls") or []

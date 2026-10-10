@@ -3,22 +3,19 @@ HTTP requests, and local command execution."""
 from __future__ import annotations
 
 import html
-import re
-import json
-import urllib.parse
-import urllib.error
-import urllib.request
-import subprocess
 import os
+import re
+import subprocess
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timezone
 
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime, timezone
-from typing import Any, Callable, Optional
 
 from .models import BudgetProfile, MemoryFilter, Persona, now_ts
-from .custom_functions import CustomFunctionRegistry
-from .storage import Storage
+from .settings import termux_bash_path
 from .time_utils import calculate_time_delta as _calculate_time_delta
 
 TOOL_SCHEMAS: list[dict] = [
@@ -511,7 +508,7 @@ def _tool_shell_exec_impl(args):
     elif runtime == "termux":
         # Prefer the Termux bash if available; otherwise use the normal shell
         # so the tool also works when the server itself is running in Termux.
-        termux_bash = os.environ.get("TERMUX_BASH", "")
+        termux_bash = termux_bash_path()
         if termux_bash and os.path.exists(termux_bash):
             argv = [termux_bash, "-lc", command]
         else:
