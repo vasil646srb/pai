@@ -12,7 +12,7 @@ class ProposalToolsMixin:
         if not self.custom_functions:
             raise ToolError("Custom function registry is not configured")
         try:
-            from .custom_functions import CustomFunction
+            from ..custom_functions import CustomFunction
 
             # LLM proposals are always saved as a draft. Even if the
             # implementation doesn't yet pass strict validation (e.g. it
@@ -54,7 +54,7 @@ class ProposalToolsMixin:
     def _tool_propose_rule(self, args, persona):
         if not self.rules_manager:
             raise ToolError("Rules manager is not configured")
-        from .models import RuleScope, RuleStatus, SelfGeneratedRule
+        from ..models import RuleScope, RuleStatus, SelfGeneratedRule
 
         rule_text = str(args.get("rule_text", "")).strip()
         if not rule_text:

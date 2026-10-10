@@ -256,3 +256,27 @@ def test_answer_check_runs_at_most_twice_per_turn(monkeypatch):
     checks = [x for x in ver.calls if "You check an assistant's reply" in x["messages"][0]["content"]]
     assert len(checks) == 2
     assert len(main.calls) == 2
+
+
+def test_english_report_for_russian_user_is_replaced_with_russian():
+    main, ver = MockLLM(), MockLLM()
+    main.queue_response(content="Привет!")
+    ver.queue_response(content='{"ok": false, "report": "Specify the exact action to save"}')
+    main.queue_response(content="Сохранено.")
+    ver.queue_response(content='{"ok": true}')
+    c = TestClient(_app(main, ver))
+    done = _sse(c, text="Сохрани", persona_id="brain")[-1]
+    report = done["verification"][0]["report"]
+    assert report and any("Ѐ" <= ch <= "ӿ" for ch in report)
+
+
+def test_revision_feedback_forbids_planning_prose():
+    main, ver = MockLLM(), MockLLM()
+    main.queue_response(content="Привет!")
+    ver.queue_response(content='{"ok": false, "report": "мимо вопроса"}')
+    main.queue_response(content="Ответ.")
+    ver.queue_response(content='{"ok": true}')
+    c = TestClient(_app(main, ver))
+    _sse(c, text="сколько дней между 1 и 4 января?", persona_id="brain")
+    feedback = main.calls[1]["messages"][-1]["content"]
+    assert "no plans, notes or commentary" in feedback

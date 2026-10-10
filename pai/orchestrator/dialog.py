@@ -95,6 +95,13 @@ def _strictness_level(value) -> int:
         return 3
 
 
+_RU_REPORT_FALLBACK = "Ответ не отвечает на последнее сообщение пользователя или отвечает не полностью."
+
+
+def _has_cyrillic(text: str) -> bool:
+    return any("\u0400" <= ch <= "\u04FF" for ch in (text or ""))
+
+
 def _user_language_hint(text: str) -> str:
     """Deterministic hint for the checker: Cyrillic-dominant text is Russian; otherwise the model
     must detect the language from the user's message."""
@@ -270,7 +277,8 @@ class DialogLoop:
                   f"Assistant's new reply:\n{answer}\n\n"
                   f"Check strictness: level {level} of 5, {_STRICTNESS_LEVELS[level][0]}. "
                   f"User's language: {_user_language_hint(user_text)}. "
-                  f"Write suggested_replies, report and missing in that language.")
+                  f"Write suggested_replies, report and missing in that language. "
+                  f"The report field must not be in English unless the user writes English.")
         try:
             model = getattr(self.verifier_llm, "model", "?")
             if self.verifier_llm is self.llm:
@@ -321,6 +329,8 @@ class DialogLoop:
         if not passed and not verdict["report"]:
             verdict["report"] = (f"usefulness {usefulness}/10 is below the {min_useful}/10 required "
                                  f"at strictness level {level}")
+        if not passed and _user_language_hint(user_text) == "Russian" and not _has_cyrillic(verdict["report"]):
+            verdict["report"] = _RU_REPORT_FALLBACK
         _log.info("answer check [%s] model=%s: ok=%s useful=%s/10 lang=%s confidence=%s%s", space_id, model,
                   verdict["ok"], usefulness, verdict["user_language"], confidence,
                   "" if verdict["ok"] else f" report={verdict['report']!r}")
@@ -356,7 +366,8 @@ class DialogLoop:
             _log.info("answer revision %d/%d requested", attempt + 1, revisions)
             feedback = (f"The answer check failed: {verdict['report']}\n"
                         "Rewrite the reply to the user's last message taking these remarks into account, "
-                        "in the user's language. Use tools if needed.")
+                        "in the user's language. Use tools if needed. Output only the reply text for the user: "
+                        "no plans, notes or commentary before or after it.")
             msgs = msgs + [{"role": "assistant", "content": final_content},
                            {"role": "user", "content": feedback}]
             yield {"type": "delta_reset"}
