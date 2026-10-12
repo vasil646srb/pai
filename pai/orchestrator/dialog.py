@@ -143,8 +143,32 @@ def _parse_verdict_json(text: str) -> dict | None:
     return None
 
 
+_SALVAGE_OK = re.compile(r'"ok"\s*:\s*(true|false)', re.IGNORECASE)
+_SALVAGE_USEFULNESS = re.compile(r'"usefulness"\s*:\s*(\d+(?:\.\d+)?)')
+_SALVAGE_REPORT = re.compile(r'"report"\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+
+def _salvage_verdict(text: str) -> dict | None:
+    """Last resort for a verdict cut off by the token limit: keep the fields that arrived intact.
+    ok is required; without it there is no verdict."""
+    ok = _SALVAGE_OK.search(text or "")
+    if not ok:
+        return None
+    data: dict = {"ok": ok.group(1).lower() == "true"}
+    use = _SALVAGE_USEFULNESS.search(text)
+    if use:
+        data["usefulness"] = float(use.group(1))
+    rep = _SALVAGE_REPORT.search(text)
+    if rep:
+        try:
+            data["report"] = json.loads('"' + rep.group(1) + '"')
+        except json.JSONDecodeError:
+            pass
+    return data
+
+
 _MAX_CHECKS_PER_TURN = 5  # hard ceiling for the 'answer checks per turn' setting
-_VERIFY_MAX_TOKENS = 1200
+_VERIFY_MAX_TOKENS = 3000  # Cyrillic JSON verdicts are token-heavy; 1200 cut them off
 FILE_CONTEXT_CHARS = 60_000  # file text sent to the model per turn, all files together
 FILE_MEMORY_EXCERPT = 800      # what a file leaves in memory (the full text stays in the file store)  # 400 truncated the Russian JSON verdict and the check was silently skipped
 _RU_FIX_FALLBACK = "Перепиши ответ так, чтобы он прямо отвечал на последнее сообщение пользователя."
@@ -345,7 +369,7 @@ class DialogLoop:
         text = (raw.get("content") or "").strip()
         self._record_side_call("answer_check", model, space_id, latency, raw.get("usage") or {},
                                verify_msgs, text, raw.get("model") or "")
-        data = _parse_verdict_json(text)
+        data = _parse_verdict_json(text) or _salvage_verdict(text)
         if data is None or "ok" not in data:
             reason = ("проверочная модель вернула пустой ответ (возможно, reasoning съел лимит токенов)"
                       if not text else "не удалось разобрать ответ проверки (возможно, обрезан)")

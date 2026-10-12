@@ -2400,6 +2400,47 @@ async function loadUsage() {
 /* ===================== SETTINGS ===================== */
 
 document.getElementById("apiBaseInput").value = getApiBase();
+/* ===================== secrets (owner only; values are write-only) ===================== */
+async function loadSecrets() {
+  const list = document.getElementById("secretList");
+  try {
+    const data = await api("/secrets");
+    list.textContent = "";
+    if (!data.names.length) list.innerHTML = `<div class="empty-state">Секретов пока нет</div>`;
+    data.names.forEach((name) => {
+      const row = document.createElement("div");
+      row.className = "settings-row";
+      row.innerHTML = `<code>{{secret:${esc(name)}}}</code>`;
+      const del = document.createElement("button");
+      del.className = "btn ghost sm";
+      del.textContent = "Удалить";
+      del.addEventListener("click", async () => {
+        try { await api(`/secrets/${encodeURIComponent(name)}`, { method: "DELETE" }); loadSecrets(); }
+        catch (e) { toast("Ошибка: " + e.message, "err"); }
+      });
+      row.appendChild(del);
+      list.appendChild(row);
+    });
+  } catch (e) {
+    list.textContent = "⚠ " + e.message;
+  }
+}
+
+document.getElementById("btnSecretSave").addEventListener("click", async () => {
+  const name = document.getElementById("secretName").value.trim();
+  const value = document.getElementById("secretValue").value;
+  const msg = document.getElementById("secretMsg");
+  try {
+    await api(`/secrets/${encodeURIComponent(name)}`, { method: "PUT", body: { value } });
+    document.getElementById("secretValue").value = "";
+    msg.textContent = `Сохранено: {{secret:${name}}}`;
+    loadSecrets();
+  } catch (e) {
+    msg.textContent = "⚠ " + e.message;
+  }
+});
+loadSecrets();
+
 document.getElementById("btnSaveSettings").addEventListener("click", async () => {
   setApiBase(document.getElementById("apiBaseInput").value.trim());
   toast("Сохранено");

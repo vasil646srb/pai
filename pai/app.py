@@ -24,6 +24,8 @@ from .web.builders import (
     build_verifier_llm_client,
     build_vision_llm_client,
 )
+from .secret_store import SecretStore
+from .tools.web import set_secret_store
 from .web.auth import install_auth
 from .web.routes import register_routes
 from .web.ui import mount_ui
@@ -51,6 +53,8 @@ def create_app(
 
     app.state.storage = storage or Storage(data_dir)
     app.state.llm_config_store = LLMConfigStore(data_dir)
+    app.state.secret_store = SecretStore(data_dir)
+    set_secret_store(app.state.secret_store)
 
     if llm is not None:
         app.state.llm = llm

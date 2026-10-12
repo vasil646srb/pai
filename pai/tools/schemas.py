@@ -118,7 +118,10 @@ TOOL_SCHEMAS: list[dict] = [
             "description": (
                 "Send a direct HTTP request with requests. Supports GET, POST, PUT, "
                 "PATCH and DELETE. Use headers, query params, JSON body or raw body "
-                "when needed. Returns status, headers and parsed JSON/text response."
+                "when needed. Returns status, headers and parsed JSON/text response. "
+                "For the main persona, local and LAN addresses are allowed, and cookies persist between calls, "
+                "so a login is done once. Saved secrets are inserted as {{secret:NAME}} in url, headers, params, "
+                "body or string values of json; the real value is never shown to you and is masked in the reply."
             ),
             "parameters": {
                 "type": "object",

@@ -397,6 +397,16 @@
       </div>
       <p class="page-sub" id="settingsStatus"></p>
 
+      <div class="section-title">Секреты основной персоны (логины, токены)</div>
+      <p class="page-sub tight">Ассистент подставляет значение как <code>{{secret:имя}}</code> в http-запрос. Само значение он не видит и в ответах оно маскируется. Здесь видны только имена.</p>
+      <div class="settings-row">
+        <div class="field"><label>Имя</label><input type="text" id="secretName" placeholder="напр. router_pass" /></div>
+        <div class="field"><label>Значение</label><input type="password" id="secretValue" autocomplete="new-password" /></div>
+        <button class="btn primary" id="btnSecretSave">Сохранить</button>
+      </div>
+      <p class="page-sub" id="secretMsg"></p>
+      <div id="secretList"></div>
+
       <div class="section-title">LLM-провайдер</div>
       <p class="page-sub tight">Куда оркестратор отправляет запросы к модели — свой vLMM-сервер, OpenRouter или любой другой OpenAI-совместимый endpoint. Изменения применяются сразу, без перезапуска сервера.</p>
 

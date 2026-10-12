@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import ipaddress
+import json
 import re
 import socket
 import urllib.error
@@ -14,6 +15,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from .errors import ToolError
+from .schemas import BRAIN_PERSONA_ID
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -97,21 +99,65 @@ def web_search(query, limit=5, timeout=8.0):
     return results
 
 
-def _tool_http_request_impl(args):
+_SECRET_REF = re.compile(r"\{\{secret:([A-Za-z0-9_.-]{1,64})\}\}")
+_SECRETS = None        # SecretStore, set by app.create_app via set_secret_store()
+_BRAIN_SESSION = None  # one cookie-keeping session for the brain persona: log in once, stay logged in
+
+
+def set_secret_store(store) -> None:
+    global _SECRETS
+    _SECRETS = store
+
+
+def _brain_session():
+    global _BRAIN_SESSION
+    if _BRAIN_SESSION is None:
+        _BRAIN_SESSION = _http_session()
+    return _BRAIN_SESSION
+
+
+def _tool_http_request_impl(args, brain: bool = False):
     method = str(args.get("method", "GET")).upper()
     if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
         raise ToolError(f"Unsupported HTTP method: {method}")
-    url = str(args.get("url", "")).strip()
+    stored = _SECRETS.values() if (brain and _SECRETS is not None) else {}
+    used: set[str] = set()
+
+    def fill(value):
+        """Insert saved secrets into strings (recursively). Only the brain persona may use them."""
+        if isinstance(value, str):
+            def repl(m):
+                name = m.group(1)
+                if not brain:
+                    raise ToolError("секреты доступны только основной персоне")
+                if name not in stored:
+                    raise ToolError(f"секрет {name!r} не задан в настройках")
+                used.add(name)
+                return stored[name]
+            return _SECRET_REF.sub(repl, value)
+        if isinstance(value, dict):
+            return {k: fill(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [fill(v) for v in value]
+        return value
+
+    def redact(text: str) -> str:
+        """Mask every secret value that was inserted into this request."""
+        for name in used:
+            text = text.replace(stored[name], "***")
+        return text
+
+    url = fill(str(args.get("url", "")).strip())
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise ToolError(f"http_request invalid URL: {url!r}")
+        raise ToolError(f"http_request invalid URL: {redact(url)!r}")
 
     timeout = max(1, min(float(args.get("timeout", 20)), 120))
     max_chars = max(1, min(int(args.get("max_chars", 200_000)), 1_000_000))
-    headers = {str(k): str(v) for k, v in (args.get("headers") or {}).items()}
-    params = args.get("params") or {}
-    json_body = args.get("json", None)
-    raw_body = args.get("body", None)
+    headers = {str(k): fill(str(v)) for k, v in (args.get("headers") or {}).items()}
+    params = fill(args.get("params") or {})
+    json_body = fill(args.get("json", None))
+    raw_body = fill(args.get("body", None))
     if json_body is not None and raw_body is not None:
         raise ToolError("Use either 'json' or 'body', not both")
 
@@ -119,13 +165,15 @@ def _tool_http_request_impl(args):
         response = _request_checked(
             method, url,
             headers=headers, params=params, json=json_body, data=raw_body, timeout=timeout,
+            allow_private=brain, session=_brain_session() if brain else None,
         )
     except requests.RequestException as e:
-        raise ToolError(f"http_request network error: {e}") from e
+        raise ToolError(redact(f"http_request network error: {e}")) from e
 
-    text = response.text[:max_chars]
+    body = redact(response.text)
+    text = body[:max_chars]
     try:
-        payload = response.json()
+        payload = json.loads(body)
         response_kind = "json"
     except ValueError:
         payload = text
@@ -133,15 +181,17 @@ def _tool_http_request_impl(args):
 
     return {
         "method": method,
-        "url": url,
-        "final_url": response.url,
+        "url": redact(url),
+        "final_url": redact(response.url),
         "status": response.status_code,
         "ok": response.ok,
-        "headers": dict(response.headers),
+        "headers": {k: redact(v) for k, v in response.headers.items()},
         "content_type": response.headers.get("Content-Type", ""),
         "response_kind": response_kind,
         "result": payload,
-        "truncated": len(response.text) > max_chars,
+        "truncated": len(body) > max_chars,
+        "session": "kept between calls" if brain else "none",
+        "used_secrets": sorted(used),
     }
 
 
@@ -188,11 +238,14 @@ def _decode_body(raw: bytes, content_type: str) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
-def _assert_public_url(url: str) -> None:
-    """Refuse URLs whose host resolves to a loopback, private, link-local or otherwise non-global address."""
+def _assert_public_url(url: str, allow_private: bool = False) -> None:
+    """Refuse URLs whose host resolves to a loopback, private, link-local or otherwise non-global address.
+    allow_private is used only for the brain persona's http_request (its own machines and LAN)."""
     host = urllib.parse.urlparse(url).hostname or ""
     if not host:
         raise ToolError("web_fetch: нет имени хоста")
+    if allow_private:
+        return
     try:
         infos = socket.getaddrinfo(host, None)
     except socket.gaierror as e:
@@ -218,11 +271,12 @@ def _get_checked(session, url: str, timeout: float, max_redirects: int = 5):
     raise ToolError("web_fetch: слишком много перенаправлений")
 
 
-def _request_checked(method: str, url: str, *, timeout: float, max_redirects: int = 5, **kw):
+def _request_checked(method: str, url: str, *, timeout: float, max_redirects: int = 5,
+                     allow_private: bool = False, session=None, **kw):
     """Any HTTP method, manual redirects, every hop checked against _assert_public_url."""
-    session = _http_session()
+    session = session or _http_session()
     for _ in range(max_redirects + 1):
-        _assert_public_url(url)
+        _assert_public_url(url, allow_private)
         resp = session.request(method, url, timeout=timeout, allow_redirects=False, **kw)
         if resp.is_redirect and resp.headers.get("Location"):
             url = urllib.parse.urljoin(url, resp.headers["Location"])
@@ -291,8 +345,9 @@ class WebToolsMixin:
     """Web search, page fetch and HTTP request tools."""
 
     def _tool_http_request(self, args, persona):
+        brain = getattr(persona, "persona_id", None) == BRAIN_PERSONA_ID
         try:
-            result = _tool_http_request_impl(args)
+            result = _tool_http_request_impl(args, brain=brain)
         except ToolError as e:
             return {"tool_failed": True, "error": str(e), "tool": "http_request"}
         return result
