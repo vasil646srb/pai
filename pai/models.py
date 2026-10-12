@@ -127,12 +127,15 @@ class MemoryFilter:
     allow_spaces: list[str] = field(default_factory=list)  # empty = all allowed
     deny_spaces: list[str] = field(default_factory=list)
     allow_tags: list[str] = field(default_factory=list)  # empty = no tag restriction
+    allow_prefixes: list[str] = field(default_factory=list)  # e.g. 'guest:' -> any guest:* space
     deny_tags: list[str] = field(default_factory=list)
 
     def permits(self, space_id: str, tags: list[str]) -> bool:
         if self.deny_spaces and space_id in self.deny_spaces:
             return False
-        if self.allow_spaces and space_id not in self.allow_spaces:
+        if (self.allow_spaces or self.allow_prefixes) and not (
+            space_id in self.allow_spaces or any(space_id.startswith(p) for p in self.allow_prefixes)
+        ):
             return False
         if self.deny_tags and any(t in self.deny_tags for t in tags):
             return False

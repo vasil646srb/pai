@@ -1,0 +1,80 @@
+/* Public guest page. Uses the owner UI's tokens (style.css), so both themes match. */
+html.guest-page, html.guest-page body { height: auto; overflow-y: auto; }
+body.guest-body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); font-family: var(--sans); }
+[hidden] { display: none !important; }
+
+.guest-top { position: sticky; top: 0; z-index: 10; height: 56px; box-sizing: border-box; }
+.guest-title { font-family: var(--mono); font-size: 12px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
+.guest-main { max-width: 760px; margin: 0 auto; padding: 14px 14px 32px; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px; }
+.guest-intro { margin: 0; font-size: 13.5px; color: var(--text-dim); line-height: 1.5; }
+.guest-hint { font-size: 12.5px; color: var(--text-faint); }
+.guest-hint:empty { display: none; }
+.g-section { margin: 6px 0 0; font-size: 14px; font-weight: 600; color: var(--text); }
+.g-stack, .g-list { display: flex; flex-direction: column; gap: 10px; }
+
+.gtabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border-soft); }
+.gtabs button { flex: 1 1 0; background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 10px 6px; color: var(--text-dim); font-size: 14px; cursor: pointer; }
+.gtabs button:hover { color: var(--text); }
+.gtabs button.active { color: var(--text); font-weight: 600; border-bottom-color: var(--accent-live); }
+
+/* chat box: same structure and bubbles as the owner chat */
+.g-chat { display: flex; flex-direction: column; height: min(70dvh, 640px); border: 1px solid var(--border-soft); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.guest-log { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.g-msg { max-width: 84%; min-width: 0; }
+.g-msg.me { align-self: flex-end; }
+.g-msg.bot { align-self: flex-start; max-width: 90%; }
+.g-msg .bubble { padding: 10px 13px; border-radius: 10px; font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.g-msg.me .bubble { background: var(--accent-cold-dim); border: 1px solid var(--accent-cold); border-bottom-right-radius: 3px; }
+.g-msg.bot .bubble { background: var(--surface-2); border: 1px solid var(--border); border-bottom-left-radius: 3px; }
+.g-msg.pending .bubble { color: var(--text-faint); }
+.g-msg.err .bubble { color: var(--danger); border-color: var(--danger); }
+
+.guest-previews { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 12px; }
+.guest-previews:empty { display: none; }
+.g-composer { display: flex; align-items: flex-end; gap: 8px; padding: 12px; border-top: 1px solid var(--border-soft); }
+.g-composer textarea { flex: 1 1 0; min-width: 0; min-height: 40px; max-height: 140px; box-sizing: border-box; padding: 9px 11px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius-sm); font-size: 16px; line-height: 1.4; resize: none; outline: none; }
+.g-composer textarea:focus { border-color: var(--accent-cold); }
+.g-composer .chat-attach-btn, .g-composer .btn { flex: 0 0 auto; }
+.g-composer .btn { height: 38px; padding: 0 16px; font-size: 14px; }
+.g-composer .chat-attach-btn { height: 38px; }
+
+/* cards, fields, rooms */
+.g-card { display: flex; flex-direction: column; gap: 10px; padding: 14px; background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--radius); box-sizing: border-box; }
+.g-field { width: 100%; box-sizing: border-box; padding: 9px 11px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius-sm); font-size: 16px; outline: none; }
+.g-field:focus { border-color: var(--accent-cold); }
+textarea.g-field { resize: vertical; min-height: 120px; }
+.g-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.g-room { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 12px; background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--radius); }
+.g-room .name { flex: 1 1 120px; min-width: 0; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.g-room .g-field { flex: 0 1 170px; width: 170px; padding: 7px 10px; font-size: 16px; }
+.g-room-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding-bottom: 8px; color: var(--text); }
+.g-room-head strong { overflow-wrap: anywhere; }
+
+@media (max-width: 520px) {
+  .guest-title { display: none; }
+  .g-msg { max-width: 92%; }
+}
+.guest-top .wordmark, .guest-top .topbar-spacer { display: flex; }
+.guest-top .topbar-spacer { display: block; }
+
+/* assistant bubble: markdown content, wrapping like the owner chat; status line while working */
+.g-msg.bot .bubble { white-space: normal; }
+.g-msg.bot .bubble .md p { margin: 0 0 8px; }
+.g-msg.bot .bubble .md p:last-child { margin-bottom: 0; }
+.g-msg.bot .bubble .md ol, .g-msg.bot .bubble .md ul { margin: 4px 0 8px; padding-left: 22px; }
+.g-msg.bot .bubble .md li { margin: 3px 0; }
+.g-msg.bot .bubble .md h1, .g-msg.bot .bubble .md h2, .g-msg.bot .bubble .md h3 { margin: 10px 0 6px; font-size: 15px; line-height: 1.3; }
+.g-msg.bot .bubble .md h1:first-child, .g-msg.bot .bubble .md h2:first-child, .g-msg.bot .bubble .md h3:first-child { margin-top: 0; }
+.g-msg.bot .bubble .md code { font-family: var(--mono); font-size: 12.5px; background: var(--bg); padding: 1px 5px; border-radius: 3px; color: var(--accent-cold); }
+.g-msg.bot .bubble .md pre { background: var(--bg); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); padding: 10px 12px; overflow-x: auto; }
+.g-msg.bot .bubble .md pre code { background: none; padding: 0; color: var(--text); }
+.g-msg.bot .bubble .md a { color: var(--accent-cold); }
+.g-msg.bot .bubble .md blockquote { margin: 6px 0; padding: 2px 12px; border-left: 2px solid var(--accent-cold); color: var(--text-dim); }
+.g-msg.bot .bubble .md table { border-collapse: collapse; font-size: 13px; display: block; overflow-x: auto; max-width: 100%; }
+.g-msg.bot .bubble .md th, .g-msg.bot .bubble .md td { border: 1px solid var(--border-soft); padding: 4px 8px; }
+.g-status { display: inline-flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 13.5px; }
+.g-dots { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-live); animation: g-pulse 1s infinite ease-in-out; }
+@keyframes g-pulse { 0%, 100% { opacity: .25; transform: scale(.8); } 50% { opacity: 1; transform: scale(1.15); } }
+.g-msg .bubble { margin: 0; }
+.g-msg.bot { max-width: 96%; }

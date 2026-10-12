@@ -1,6 +1,8 @@
 """Application factory: builds LLM clients, storage and the orchestrator, then mounts the web layer."""
 from __future__ import annotations
 
+import os
+
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -22,6 +24,7 @@ from .web.builders import (
     build_verifier_llm_client,
     build_vision_llm_client,
 )
+from .web.auth import install_auth
 from .web.routes import register_routes
 from .web.ui import mount_ui
 from .web.util import ensure_pai_logging
@@ -39,12 +42,11 @@ def create_app(
     data_dir = data_dir or settings.data_dir
     ensure_pai_logging()
     app = FastAPI(title="Personal AI Assistant — API", version="0.1.0")
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    origins = [o.strip() for o in os.environ.get("PAI_CORS_ORIGINS", "").split(",") if o.strip()]
+    if origins:  # the UI is same-origin; list other origins explicitly, never '*'
+        app.add_middleware(CORSMiddleware, allow_origins=origins,
+                           allow_methods=["*"], allow_headers=["Authorization", "Content-Type"])
+    install_auth(app, data_dir, settings.auth_password, settings.auth_disabled)
     mount_ui(app)
 
     app.state.storage = storage or Storage(data_dir)
@@ -100,7 +102,7 @@ def create_app(
         timezone_name=settings.timezone_name,
         tail_length=settings.tail_length,
         verify_enabled=settings.verify_enabled,
-        verify_revisions=settings.verify_revisions,
+        verify_max_checks=saved_config.verify_max_checks,
     )
     app.state.settings = settings
     app.state.services = ServiceStore(Path(data_dir) / "services.json")

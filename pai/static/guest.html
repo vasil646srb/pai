@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ru" class="guest-page">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Помощник</title>
+<script>
+  // Same theme key and default as the owner UI; applied before first paint.
+  (function () {
+    var saved = null;
+    try { saved = localStorage.getItem("pai.theme"); } catch (_) {}
+    document.documentElement.setAttribute("data-theme", saved === "dark" ? "dark" : "light");
+  })();
+</script>
+<link rel="stylesheet" href="/static/style.css" />
+<link rel="stylesheet" href="/static/guest.css" />
+</head>
+<body class="guest-body">
+<header class="topbar guest-top">
+  <div class="wordmark">p<span class="dot">a</span>i</div>
+  <span class="guest-title">Помощник · гостевой доступ</span>
+  <div class="topbar-spacer"></div>
+  <button class="theme-toggle" id="themeToggle" type="button" title="Переключить тему">🌙</button>
+</header>
+
+<main class="guest-main">
+  <p class="guest-intro">Общий чат для всех гостей, личные комнаты с паролем или сообщение владельцу.</p>
+  <nav class="gtabs">
+    <button type="button" id="tabCommon" class="active">Общий чат</button>
+    <button type="button" id="tabRooms">Комнаты</button>
+    <button type="button" id="tabMsg">Владельцу</button>
+  </nav>
+
+  <section id="paneCommon"></section>
+
+  <section id="paneRooms" hidden>
+    <div id="roomsView" class="g-stack">
+      <h2 class="g-section">Личные комнаты</h2>
+      <p class="guest-intro">Сообщения в комнате видны только тем, кто знает пароль.</p>
+      <div id="roomsList" class="g-list"></div>
+      <h2 class="g-section">Создать комнату</h2>
+      <form id="roomCreate" class="g-card">
+        <input id="roomName" class="g-field" maxlength="40" placeholder="Название комнаты" required />
+        <input id="roomPassword" class="g-field" type="password" minlength="6" maxlength="128" autocomplete="new-password" placeholder="Пароль (не короче 6 символов)" required />
+        <div class="g-row"><button class="btn primary" type="submit">Создать и войти</button></div>
+        <div class="guest-hint" id="roomMsg"></div>
+      </form>
+    </div>
+    <div id="roomView" hidden></div>
+  </section>
+
+  <section id="paneMsg" hidden>
+    <form id="msgForm" class="g-card">
+      <input id="msgName" class="g-field" maxlength="60" placeholder="Ваше имя (необязательно)" />
+      <textarea id="msgText" class="g-field" rows="6" maxlength="1000" placeholder="Сообщение владельцу" required></textarea>
+      <div class="g-row"><button class="btn primary" id="btnMsgSend" type="submit">Отправить владельцу</button></div>
+      <div class="guest-hint" id="msgStatus"></div>
+    </form>
+  </section>
+</main>
+<script src="/static/md.js"></script>
+<script src="/static/guest.js"></script>
+</body>
+</html>

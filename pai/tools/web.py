@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import html
+import ipaddress
 import re
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -114,15 +116,9 @@ def _tool_http_request_impl(args):
         raise ToolError("Use either 'json' or 'body', not both")
 
     try:
-        response = _http_session().request(
-            method,
-            url,
-            headers=headers,
-            params=params,
-            json=json_body,
-            data=raw_body,
-            timeout=timeout,
-            allow_redirects=True,
+        response = _request_checked(
+            method, url,
+            headers=headers, params=params, json=json_body, data=raw_body, timeout=timeout,
         )
     except requests.RequestException as e:
         raise ToolError(f"http_request network error: {e}") from e
@@ -192,6 +188,55 @@ def _decode_body(raw: bytes, content_type: str) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
+def _assert_public_url(url: str) -> None:
+    """Refuse URLs whose host resolves to a loopback, private, link-local or otherwise non-global address."""
+    host = urllib.parse.urlparse(url).hostname or ""
+    if not host:
+        raise ToolError("web_fetch: нет имени хоста")
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror as e:
+        raise ToolError(f"web_fetch: не удалось найти хост {host}") from e
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0].split("%")[0])
+        if ip.version == 6 and ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        if not ip.is_global:
+            raise ToolError("web_fetch: адрес во внутренней сети запрещён")
+
+
+def _get_checked(session, url: str, timeout: float, max_redirects: int = 5):
+    """GET with manual redirects: every hop is checked against _assert_public_url."""
+    for _ in range(max_redirects + 1):
+        _assert_public_url(url)
+        resp = session.get(url, timeout=timeout, allow_redirects=False, stream=True)
+        if resp.is_redirect and resp.headers.get("Location"):
+            url = urllib.parse.urljoin(url, resp.headers["Location"])
+            resp.close()
+            continue
+        return resp
+    raise ToolError("web_fetch: слишком много перенаправлений")
+
+
+def _request_checked(method: str, url: str, *, timeout: float, max_redirects: int = 5, **kw):
+    """Any HTTP method, manual redirects, every hop checked against _assert_public_url."""
+    session = _http_session()
+    for _ in range(max_redirects + 1):
+        _assert_public_url(url)
+        resp = session.request(method, url, timeout=timeout, allow_redirects=False, **kw)
+        if resp.is_redirect and resp.headers.get("Location"):
+            url = urllib.parse.urljoin(url, resp.headers["Location"])
+            if resp.status_code in (301, 302, 303) and method != "GET":
+                method = "GET"
+                kw.pop("json", None)
+                kw.pop("data", None)
+            kw.pop("params", None)  # query parameters apply to the first request only
+            resp.close()
+            continue
+        return resp
+    raise ToolError("http_request: слишком много перенаправлений")
+
+
 def fetch_url(url, mode="text", timeout=10.0, max_chars=8000):
     """Follow a link and return its page content.
 
@@ -208,7 +253,7 @@ def fetch_url(url, mode="text", timeout=10.0, max_chars=8000):
     request_url = _normalize_url(url)
 
     try:
-        with _http_session().get(request_url, timeout=timeout, allow_redirects=True, stream=True) as resp:
+        with _get_checked(_http_session(), request_url, timeout=timeout) as resp:
             resp.raise_for_status()
             content_type = resp.headers.get("Content-Type", "")
             ct = content_type.lower()

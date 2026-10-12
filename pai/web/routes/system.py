@@ -1,6 +1,7 @@
 """Health and usage/pricing endpoints."""
 from __future__ import annotations
 
+import json
 import logging
 import time
 
@@ -13,11 +14,45 @@ from ..deps import get_orchestrator
 _log = logging.getLogger("pai.web")
 
 
+def _openrouter_get(llm, path: str) -> dict:
+    """GET {base_url}{path} with the configured key; returns the body's "data" object."""
+    with llm._open(llm.base_url + path, None, method="GET") as resp:
+        body = json.loads(resp.read().decode("utf-8"))
+    return body.get("data", body) if isinstance(body, dict) else {}
+
+
 def register(app: FastAPI) -> None:
     @app.get("/health")
     def health():
         return {"status": "ok"}
 
+
+    @app.get("/usage/balance")
+    def usage_balance(refresh: bool = False):
+        """OpenRouter balance for the configured key. The key itself is never returned."""
+        llm = app.state.llm
+        if not isinstance(llm, OpenAICompatibleClient) or not llm.is_openrouter:
+            return {"supported": False}
+        now = time.time()
+        cache = getattr(app.state, "_openrouter_balance_cache", None)
+        if not refresh and cache and now - cache["ts"] < 60:
+            return cache["data"]
+        out: dict = {"supported": True, "ts": now, "key": None, "account": None, "error": None}
+        keep = ("label", "limit", "limit_remaining", "limit_reset", "usage", "usage_daily",
+                "usage_weekly", "usage_monthly", "is_free_tier")
+        try:
+            key = _openrouter_get(llm, "/key")
+            out["key"] = {k: key.get(k) for k in keep}
+        except Exception as e:  # balance is optional: report the reason, keep the page working
+            _log.warning("openrouter key lookup failed: %s", e)
+            out["error"] = f"{type(e).__name__}: {e}"
+        try:  # account-level credits: only if the key is allowed to read them
+            credits = _openrouter_get(llm, "/credits")
+            out["account"] = {"total_credits": credits.get("total_credits"), "total_usage": credits.get("total_usage")}
+        except Exception:
+            out["account"] = None
+        app.state._openrouter_balance_cache = {"ts": now, "data": out}
+        return out
 
     @app.get("/usage")
     def usage(orch: Orchestrator = Depends(get_orchestrator)):

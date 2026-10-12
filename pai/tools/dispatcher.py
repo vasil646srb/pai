@@ -10,6 +10,13 @@ from .persona import PersonaToolsMixin
 from .proposals import ProposalToolsMixin
 from .schemas import BRAIN_ONLY_TOOLS, BRAIN_PERSONA_ID, TOOL_SCHEMAS
 from .shell import ShellToolsMixin
+
+# Personas that may never change rules or functions, even though propose_* tools are otherwise always granted.
+RESTRICTED_PERSONA_PREFIX = "guest"  # 'guest' and every per-room 'guest-room-<id>' persona
+
+
+def _can_self_modify(persona) -> bool:
+    return not str(getattr(persona, "persona_id", "")).startswith(RESTRICTED_PERSONA_PREFIX)
 from .web import WebToolsMixin
 
 _log = logging.getLogger(__name__)
@@ -44,8 +51,10 @@ class ToolDispatcher(PersonaToolsMixin, ProposalToolsMixin, MemoryToolsMixin, We
             for s in TOOL_SCHEMAS
             if (s["function"]["name"] in BRAIN_ONLY_TOOLS and is_brain and self.persona_registry is not None)
             or (s["function"]["name"] not in BRAIN_ONLY_TOOLS and s["function"]["name"] in persona.tool_permissions)
-            or (s["function"]["name"] == "propose_function" and self.custom_functions is not None)
-            or (s["function"]["name"] == "propose_rule" and self.rules_manager is not None)
+            or (s["function"]["name"] == "propose_function" and self.custom_functions is not None
+                and _can_self_modify(persona))
+            or (s["function"]["name"] == "propose_rule" and self.rules_manager is not None
+                and _can_self_modify(persona))
             # get_skill is granted automatically to personas that have skills
             or (
                 s["function"]["name"] == "get_skill"
@@ -62,6 +71,8 @@ class ToolDispatcher(PersonaToolsMixin, ProposalToolsMixin, MemoryToolsMixin, We
         return builtins + custom
 
     def dispatch(self, name, arguments, persona=None):
+        if persona is not None and not _can_self_modify(persona) and name in ("propose_function", "propose_rule"):
+            raise ToolError("Эта персона не меняет правила и функции")
         if (
             persona is not None
             and name not in persona.tool_permissions

@@ -1,3 +1,81 @@
+/* ===================== sign-in: token on this device ===================== */
+const LS_KEY_TOKEN = "pai.token";
+
+function readToken() {
+  try { return localStorage.getItem(LS_KEY_TOKEN) || ""; } catch (_) { return ""; }
+}
+function writeToken(t) {
+  try { if (t) localStorage.setItem(LS_KEY_TOKEN, t); else localStorage.removeItem(LS_KEY_TOKEN); } catch (_) {}
+}
+function apiOrigin() {
+  try { return new URL(getApiBase() || location.href, location.href).origin; } catch (_) { return location.origin; }
+}
+function isOwnApiUrl(url) {
+  try { return new URL(url, location.href).origin === apiOrigin(); } catch (_) { return false; }
+}
+function showLogin(msg) {
+  const gate = document.getElementById("authGate");
+  if (!gate) return;
+  gate.hidden = false;
+  if (msg) document.getElementById("authMsg").textContent = msg;
+  setTimeout(() => document.getElementById("authPassword").focus(), 0);
+}
+
+const _nativeFetch = window.fetch.bind(window);
+// Every request to our own API carries the token; a 401 means the session is gone: show the login again.
+window.fetch = async (input, init = {}) => {
+  const url = typeof input === "string" ? input : (input && input.url) || "";
+  const headers = new Headers(init.headers || {});
+  const token = readToken();
+  if (token && isOwnApiUrl(url)) headers.set("Authorization", "Bearer " + token);
+  const res = await _nativeFetch(input, { ...init, headers });
+  if (res.status === 401 && isOwnApiUrl(url) && !url.endsWith("/auth/login")) {
+    writeToken("");
+    showLogin("Сессия истекла. Войдите снова.");
+  }
+  return res;
+};
+
+(async () => {
+  try {
+    const r = await _nativeFetch((getApiBase() || "").replace(/\/$/, "") + "/auth/status");
+    const s = await r.json();
+    if (s.required && !readToken()) {
+      // Посетитель без токена не видит запрос пароля: его отправляем на страницу для гостей.
+      // Владелец входит по адресу /?owner=1.
+      if (new URLSearchParams(location.search).get("owner") === "1") showLogin(s.configured ? "" : "Вход не настроен: задайте PAI_PASSWORD на сервере");
+      else location.replace("/guest");
+    }
+  } catch (_) {}
+})();
+
+document.getElementById("authForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const msg = document.getElementById("authMsg");
+  const btn = document.getElementById("btnLogin");
+  msg.textContent = "";
+  btn.disabled = true;
+  try {
+    const res = await _nativeFetch((getApiBase() || "").replace(/\/$/, "") + "/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: document.getElementById("authPassword").value }),
+    });
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try { const j = await res.json(); if (j && j.detail) detail = j.detail; } catch (_) {}
+      msg.textContent = detail;
+      return;
+    }
+    writeToken((await res.json()).token);
+    location.reload();
+  } catch (_) {
+    msg.textContent = "Нет связи с сервером";
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 "use strict";
 
 /* ===================== API client ===================== */
@@ -48,12 +126,6 @@ function fmtBytes(n) {
   return (n / (1024 * 1024)).toFixed(2) + " МБ";
 }
 
-function esc(s) {
-  const d = document.createElement("div");
-  d.textContent = s === undefined || s === null ? "" : String(s);
-  return d.innerHTML;
-}
-
 function toast(msg, kind = "") {
   const stack = document.getElementById("toastStack");
   const el = document.createElement("div");
@@ -61,76 +133,6 @@ function toast(msg, kind = "") {
   el.textContent = msg;
   stack.appendChild(el);
   setTimeout(() => el.remove(), 4200);
-}
-
-/* ===================== tiny markdown renderer (no deps) ===================== */
-/* Deliberately minimal: headings, bold/italic, inline code, fenced code
-   blocks, lists, blockquotes, links, hr, tables. Escapes HTML first so raw
-   markdown text can never inject markup. */
-function renderMarkdown(src) {
-  if (!src) return "";
-  const codeBlocks = [];
-  let text = src.replace(/```([a-zA-Z0-9_-]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-    const idx = codeBlocks.length;
-    codeBlocks.push(`<pre><code>${esc(code.replace(/\n$/, ""))}</code></pre>`);
-    return `\u0000CODEBLOCK${idx}\u0000`;
-  });
-
-  text = esc(text);
-  // restore code blocks (already escaped internally)
-  text = text.replace(/\u0000CODEBLOCK(\d+)\u0000/g, (_, i) => codeBlocks[Number(i)]);
-  // re-escape stray \u0000 markers that esc() would have mangled — none expected, no-op otherwise
-
-  const lines = text.split("\n");
-  const out = [];
-  let inUl = false, inOl = false, inQuote = false;
-  const closeLists = () => {
-    if (inUl) { out.push("</ul>"); inUl = false; }
-    if (inOl) { out.push("</ol>"); inOl = false; }
-    if (inQuote) { out.push("</blockquote>"); inQuote = false; }
-  };
-  const inline = (s) => s
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "<em>$1</em>")
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-
-  for (const raw of lines) {
-    if (raw.startsWith("\u0000CODEBLOCK") || /^<pre>/.test(raw)) { closeLists(); out.push(raw); continue; }
-    const line = raw;
-    if (/^\s*$/.test(line)) { closeLists(); continue; }
-    let m;
-    if ((m = line.match(/^(#{1,3})\s+(.*)$/))) {
-      closeLists();
-      const lvl = m[1].length;
-      out.push(`<h${lvl}>${inline(m[2])}</h${lvl}>`);
-      continue;
-    }
-    if (/^\s*(-{3,}|\*{3,})\s*$/.test(line)) { closeLists(); out.push("<hr/>"); continue; }
-    if ((m = line.match(/^&gt;\s?(.*)$/))) {
-      if (!inQuote) { closeLists(); out.push("<blockquote>"); inQuote = true; }
-      out.push(inline(m[1]) + "<br/>");
-      continue;
-    }
-    if ((m = line.match(/^\s*[-*]\s+(.*)$/))) {
-      if (inOl) { out.push("</ol>"); inOl = false; }
-      if (inQuote) { out.push("</blockquote>"); inQuote = false; }
-      if (!inUl) { out.push("<ul>"); inUl = true; }
-      out.push(`<li>${inline(m[1])}</li>`);
-      continue;
-    }
-    if ((m = line.match(/^\s*\d+\.\s+(.*)$/))) {
-      if (inUl) { out.push("</ul>"); inUl = false; }
-      if (inQuote) { out.push("</blockquote>"); inQuote = false; }
-      if (!inOl) { out.push("<ol>"); inOl = true; }
-      out.push(`<li>${inline(m[1])}</li>`);
-      continue;
-    }
-    closeLists();
-    out.push(`<p>${inline(line)}</p>`);
-  }
-  closeLists();
-  return out.join("\n");
 }
 
 function lvlClass(level) {
@@ -764,6 +766,7 @@ applyThemeIcon();
 // (already base64-encoded, ready to drop straight into the request body
 // and into an <img src>). Cleared after each send.
 let pendingAttachments = [];
+let pendingFiles = [];  // uploaded files: {id, name, mime, has_text, note}
 
 function renderAttachmentPreviews() {
   const container = document.getElementById("chatAttachments");
@@ -786,6 +789,35 @@ function renderAttachmentPreviews() {
     thumb.appendChild(rm);
     container.appendChild(thumb);
   });
+  pendingFiles.forEach((f, i) => {
+    const chip = document.createElement("div");
+    chip.className = "file-chip";
+    chip.textContent = `📄 ${f.name}${f.has_text ? "" : " · без текста"}`;
+    const rm = document.createElement("button");
+    rm.className = "remove";
+    rm.type = "button";
+    rm.textContent = "×";
+    rm.title = "Убрать";
+    rm.addEventListener("click", () => {
+      pendingFiles.splice(i, 1);
+      renderAttachmentPreviews();
+    });
+    chip.appendChild(rm);
+    container.appendChild(chip);
+  });
+}
+
+function appendFileChips(div, files) {
+  if (!div || !files || !files.length) return;
+  const wrap = document.createElement("div");
+  wrap.className = "file-chips";
+  files.forEach((f) => {
+    const chip = document.createElement("span");
+    chip.className = "file-chip";
+    chip.textContent = `📄 ${f.name}`;
+    wrap.appendChild(chip);
+  });
+  div.appendChild(wrap);
 }
 
 function readFileAsDataUrl(file) {
@@ -799,6 +831,38 @@ function readFileAsDataUrl(file) {
 
 document.getElementById("btnAttachImage").addEventListener("click", () => {
   document.getElementById("chatImageInput").click();
+});
+
+document.getElementById("btnAttachFile").addEventListener("click", () => {
+  document.getElementById("chatFileInput").click();
+});
+
+document.getElementById("chatFileInput").addEventListener("change", async (e) => {
+  const files = Array.from(e.target.files || []);
+  e.target.value = "";
+  const base = (getApiBase() || "").replace(/\/$/, "");
+  for (const file of files) {
+    if (file.size > 20 * 1024 * 1024) {
+      toast(`${file.name}: больше 20 МБ`, "err");
+      continue;
+    }
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    try {
+      const res = await fetch(base + "/files", { method: "POST", body: fd });
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try { const j = await res.json(); if (j && j.detail) detail = j.detail; } catch (_) {}
+        throw new Error(detail);
+      }
+      const meta = await res.json();
+      pendingFiles.push(meta);
+      if (meta.note) toast(`${meta.name}: ${meta.note}`);
+    } catch (err) {
+      toast(`Не удалось загрузить ${file.name}: ${err.message}`, "err");
+    }
+  }
+  renderAttachmentPreviews();
 });
 
 document.getElementById("chatImageInput").addEventListener("change", async (e) => {
@@ -876,20 +940,23 @@ async function sendChat(override) {
   const input = document.getElementById("chatInput");
   const fromQuick = typeof override === "string";
   const text = (fromQuick ? override : input.value).trim();
-  if (!text && !pendingAttachments.length) return;
+  if (!text && !pendingAttachments.length && !pendingFiles.length) return;
   renderQuickReplies([]);
   const persona_id = document.getElementById("chatPersona").value || "brain";
   const space_id = currentChatSpace();
   const images = pendingAttachments.slice();
+  const attachedFiles = pendingFiles.slice();
 
-  appendMessage(
+  const userDiv = appendMessage(
     "user", text, `${persona_id} · ${space_id} · ${fmtTs(Date.now() / 1000)}`, images,
   );
+  appendFileChips(userDiv, attachedFiles);
   if (!fromQuick) {
     input.value = "";
     input.style.height = "auto";
   }
   pendingAttachments = [];
+  pendingFiles = [];
   renderAttachmentPreviews();
 
   const btn = document.getElementById("btnSend");
@@ -945,7 +1012,7 @@ async function sendChat(override) {
     const res = await fetch(streamBase + "/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, persona_id, space_id, images }),
+      body: JSON.stringify({ text, persona_id, space_id, images, file_ids: attachedFiles.map((f) => f.id) }),
     });
     if (!res.ok || !res.body) {
       let detail = `HTTP ${res.status}`;
@@ -1015,8 +1082,10 @@ async function sendChat(override) {
             reasoningBlock = ensureReasoningBlock(assistantDiv);
             reasoningBodyEl = reasoningBlock.querySelector(".reasoning-block-body");
           }
+          const plan = (evt.fix_plan || []).map((x, i) => `${i + 1}. ${x}`).join("\n");
           const note = `— Ответ не прошёл проверку (попытка ${evt.attempt}) —\n${evt.text}` +
-            (evt.report ? `\nОтчёт проверки: ${evt.report}` : "");
+            (evt.report ? `\nОтчёт проверки: ${evt.report}` : "") +
+            (plan ? `\nПлан исправления:\n${plan}` : "");
           fullReasoning += (fullReasoning ? "\n\n" : "") + note;
           reasoningBodyEl.textContent = fullReasoning;
           fullText = "";
@@ -1099,6 +1168,7 @@ async function sendChat(override) {
       if (metaEl) metaEl.textContent = `${persona_id}${toolNote}`;
     }
     if (assistantDiv) attachCopyButton(assistantDiv, () => fullText);
+    renderVerificationBlock(assistantDiv, finalVerification);
     // quick replies: the checker's suggestions for the user's likely next message (last attempt)
     const lastCheck = finalVerification && finalVerification.length ? finalVerification[finalVerification.length - 1] : null;
     renderQuickReplies(lastCheck ? lastCheck.suggested_replies : []);
@@ -1124,6 +1194,29 @@ async function sendChat(override) {
     btn.textContent = "Отправить";
     setTokSpeed("");
   }
+}
+
+// Under the reply: the last check's verdict when it did not pass (report, what is missing, fix plan),
+// or the reason the check did not run. Nothing is shown when the reply passed.
+function renderVerificationBlock(div, verdicts) {
+  if (!div || !verdicts || !verdicts.length) return;
+  div.querySelectorAll(".check-block").forEach((el) => el.remove());
+  const last = verdicts[verdicts.length - 1];
+  if (!last || last.status === "pass" || last.ok === true) return;
+  const box = document.createElement("div");
+  if (last.status === "error") {
+    box.className = "check-block error";
+    box.innerHTML = `<div class="check-title">Проверка ответа не выполнена</div>` +
+      `<div class="check-text">${esc(last.error || "неизвестная ошибка")}</div>`;
+  } else {
+    const steps = (last.fix_plan || []).map((x) => `<li>${esc(x)}</li>`).join("");
+    box.className = "check-block fail";
+    box.innerHTML = `<div class="check-title">⚠ Ответ не прошёл проверку (проверок: ${verdicts.length})</div>` +
+      `<div class="check-text"><b>Отчёт:</b> ${esc(last.report || "—")}</div>` +
+      (last.missing ? `<div class="check-text"><b>Не хватает:</b> ${esc(last.missing)}</div>` : "") +
+      (steps ? `<div class="check-text"><b>План исправления:</b><ol>${steps}</ol></div>` : "");
+  }
+  div.appendChild(box);
 }
 
 document.getElementById("btnSend").addEventListener("click", sendChat);
@@ -1256,8 +1349,10 @@ document.getElementById("btnCompress").addEventListener("click", async () => {
   resultEl.textContent = "выполняется…";
   try {
     const res = await api("/memory/compress", { method: "POST", body: { space_id, force_top } });
-    resultEl.textContent = `создано узлов: ${res.count}`;
-    toast(`Сжатие завершено: +${res.count} узлов`, "ok");
+    const parts = Object.entries(res.by_space || {}).map(([sid, r]) => `${sid}: ${r.error ? "ошибка" : r.count}`);
+    resultEl.textContent = `создано узлов: ${res.count}` + (parts.length > 1 ? ` (${parts.join(", ")})` : "");
+    const failed = Object.values(res.by_space || {}).filter((r) => r.error).length;
+    toast(`Сжатие завершено: +${res.count} узлов` + (failed ? `, ошибок: ${failed}` : ""), failed ? "err" : "ok");
     loadOverview();
   } catch (e) {
     resultEl.textContent = "";
@@ -1437,7 +1532,7 @@ async function runSearch() {
           <span class="sid">${esc(r.id)}</span>
           <span class="tag lvl ${lvlClass(r.level)}">L${r.level} · ${esc(r.space_id)}</span>
         </div>
-        <div class="snip">${(r.snippet || "").replace(/\[/g, "<mark>").replace(/\]/g, "</mark>")}</div>
+        <div class="snip">${esc(r.snippet || "").replace(/\[/g, "<mark>").replace(/\]/g, "</mark>")}</div>
       </div>
     `).join("");
     box.querySelectorAll(".search-result").forEach((el) => {
@@ -2205,7 +2300,38 @@ document.getElementById("actionLogLimit").addEventListener("change", loadActionL
 
 /* ===================== USAGE ===================== */
 
+async function loadBalance(refresh = false) {
+  const cards = document.getElementById("balanceCards");
+  const note = document.getElementById("balanceNote");
+  const fmtUsd = (n) => (n == null ? "—" : `$${Number(n).toFixed(2)}`);
+  cards.innerHTML = `<div class="card stat-card"><div class="stat-label">загрузка…</div></div>`;
+  try {
+    const b = await api(`/usage/balance${refresh ? "?refresh=true" : ""}`);
+    if (!b.supported) {
+      cards.innerHTML = "";
+      note.textContent = "Баланс показывается только при провайдере OpenRouter.";
+      return;
+    }
+    const k = b.key || {};
+    const unlimited = k.limit == null;
+    const acc = b.account;
+    cards.innerHTML = `
+      <div class="card stat-card"><div class="stat-label">остаток на ключе</div><div class="stat-value warm">${b.key ? (unlimited ? "без лимита" : fmtUsd(k.limit_remaining)) : "—"}</div><div class="stat-hint">${unlimited ? "лимит на ключе не задан" : `из ${fmtUsd(k.limit)}${k.limit_reset ? `, сброс: ${esc(k.limit_reset)}` : ""}`}</div></div>
+      <div class="card stat-card"><div class="stat-label">потрачено сегодня</div><div class="stat-value">${fmtUsd(k.usage_daily)}</div><div class="stat-hint">UTC-день</div></div>
+      <div class="card stat-card"><div class="stat-label">за месяц</div><div class="stat-value">${fmtUsd(k.usage_monthly)}</div><div class="stat-hint">всего с начала: ${fmtUsd(k.usage)}</div></div>
+      ${acc ? `<div class="card stat-card"><div class="stat-label">кредиты аккаунта</div><div class="stat-value">${fmtUsd(acc.total_credits - acc.total_usage)}</div><div class="stat-hint">куплено ${fmtUsd(acc.total_credits)}</div></div>` : ""}`;
+    const stamp = new Date(b.ts * 1000).toLocaleTimeString("ru-RU");
+    note.textContent = (b.error ? `⚠ ${b.error} · ` : "") + `обновлено ${stamp}`;
+  } catch (e) {
+    cards.innerHTML = "";
+    note.textContent = "⚠ Не удалось получить баланс: " + e.message;
+  }
+}
+
+document.getElementById("btnBalanceRefresh").addEventListener("click", () => loadBalance(true));
+
 async function loadUsage() {
+  loadBalance();
   const cards = document.getElementById("usageCards");
   const byKind = document.getElementById("usageByKind");
   const modelsEl = document.getElementById("usageModels");
@@ -2479,6 +2605,13 @@ function setStrictnessLabel() {
 }
 document.getElementById("llmVerifyStrictness").addEventListener("input", setStrictnessLabel);
 
+function setMaxChecksLabel() {
+  const n = Number(document.getElementById("llmVerifyMaxChecks").value) || 2;
+  const txt = n === 1 ? "1 · только проверка" : `${n} · до ${n - 1} переделок`;
+  document.getElementById("llmVerifyMaxChecksLabel").textContent = txt;
+}
+document.getElementById("llmVerifyMaxChecks").addEventListener("input", setMaxChecksLabel);
+
 const visionModelPicker = makeModelPicker({
   head: "modelTableHeadVision", body: "modelTableBodyVision", manual: "llmVisionModelManual",
   picker: "modelPickerVision", search: "modelSearchVision", filterPriced: "modelFilterPricedVision",
@@ -2503,6 +2636,8 @@ async function loadLlmSettings() {
     modelPickerState.selectedId = data.model || "";
     document.getElementById("llmModelManual").value = data.model || "";
     document.getElementById("llmVerifyStrictness").value = data.verify_strictness ?? 3;
+    document.getElementById("llmVerifyMaxChecks").value = data.verify_max_checks ?? 2;
+    setMaxChecksLabel();
     setStrictnessLabel();
     visionModelPicker.state.selectedId = data.vision_model || "";
     document.getElementById("llmVisionModelManual").value = data.vision_model || "";
@@ -2660,6 +2795,7 @@ document.getElementById("btnSaveLlmSettings").addEventListener("click", async ()
       verify_model: document.getElementById("llmVerifyModelManual").value.trim(),
       vision_model: document.getElementById("llmVisionModelManual").value.trim(),
       verify_strictness: Number(document.getElementById("llmVerifyStrictness").value),
+      verify_max_checks: Number(document.getElementById("llmVerifyMaxChecks").value),
       site_url: document.getElementById("llmSiteUrl").value.trim(),
       site_name: document.getElementById("llmSiteName").value.trim(),
       reasoning_enabled: document.getElementById("llmReasoningEnabled").checked,
@@ -2701,6 +2837,8 @@ document.getElementById("btnSaveLlmSettings").addEventListener("click", async ()
       : `пусто = как для суммаризации (сейчас: ${data.effective_verify_model || "—"})`;
     document.getElementById("llmVisionModelManual").value = data.vision_model || "";
     document.getElementById("llmVerifyStrictness").value = data.verify_strictness ?? 3;
+    document.getElementById("llmVerifyMaxChecks").value = data.verify_max_checks ?? 2;
+    setMaxChecksLabel();
     setStrictnessLabel();
     document.getElementById("llmSummarizerModelManual").value = data.summarizer_model || "";
     document.getElementById("llmSummarizerModelManual").placeholder = data.summarizer_model

@@ -41,6 +41,10 @@ class PersonaRegistry:
         if self.path:
             self.save()
 
+    def ephemeral(self, persona: Persona) -> None:
+        """Register a persona for this process only: it is never written to personas.json."""
+        self._personas[persona.persona_id] = persona
+
     def get(self, persona_id: str) -> Persona | None:
         return self._personas.get(persona_id)
 
@@ -97,6 +101,12 @@ class PersonaRegistry:
                 bp.migrations.append("builtin_addon_v1")
                 bp.updated_at = now_ts()
                 changed = True
+        guest = self._personas.get("guest")
+        if guest is not None and "guest_space_v2" not in guest.migrations:
+            guest.memory_filter = MemoryFilter(allow_spaces=["guest", "shared"], deny_tags=["diary"])
+            guest.migrations.append("guest_space_v2")
+            guest.updated_at = now_ts()
+            changed = True
         brain = self._personas.get("brain")
         if brain is not None and "brain_default_tools_v1" not in brain.migrations:
             brain.tool_permissions = list(dict.fromkeys((brain.tool_permissions or []) + BRAIN_DEFAULT_TOOLS))
@@ -110,8 +120,46 @@ class PersonaRegistry:
             brain.migrations.append("brain_persona_tools_v1")
             brain.updated_at = now_ts()
             changed = True
+        for np_ in _builtin_new_personas():
+            if np_.persona_id not in self._personas:
+                self._personas[np_.persona_id] = np_
+                changed = True
         if changed:
             self.save()
+
+
+def _builtin_new_personas() -> list[Persona]:
+    """Added to every install that does not have them yet (see PersonaRegistry.load)."""
+    return [
+        Persona(
+            persona_id="assistant",
+            name="Помощник",
+            description=(
+                "Стандартный помощник: отвечает по делу, сначала ответ, потом детали. Видит всю память, "
+                "ищет в вебе. Без shell и HTTP."
+            ),
+            system_core_addon=load_prompt("addons/assistant"),
+            active_skill_ids=[],
+            memory_filter=MemoryFilter(),
+            tool_permissions=[
+                "get_fragment", "search_archive", "calculate_time_delta", "web_search", "web_fetch",
+            ],
+            tone="neutral, clear",
+        ),
+        Persona(
+            persona_id="guest",
+            name="Гость",
+            description=(
+                "Публичная персона для посетителей сайта. Видит общее пространство guest и shared (diary скрыт), "
+                "ищет в вебе, читает изображения. Без personal, shell, HTTP и изменения правил."
+            ),
+            system_core_addon=load_prompt("addons/guest"),
+            active_skill_ids=[],
+            memory_filter=MemoryFilter(allow_spaces=["guest", "shared"], deny_tags=["diary"]),
+            tool_permissions=["get_fragment", "search_archive", "web_search", "web_fetch"],
+            tone="friendly, brief",
+        ),
+    ]
 
 
 BUILTIN_ADDONS: dict[str, str] = {
@@ -204,6 +252,8 @@ def default_personas() -> PersonaRegistry:
         tone="socratic, patient",
     ))
 
+    for p in _builtin_new_personas():
+        reg.register(p)
     return reg
 
 

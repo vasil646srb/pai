@@ -36,6 +36,7 @@ def register(app: FastAPI) -> None:
             result = orch.handle_turn(
                 req.text, persona_id=req.persona_id, space_id=req.space_id, reference_now=ref_now,
                 images=req.images or None,
+                file_ids=req.file_ids or None,
             )
         except KeyError as e:
             raise HTTPException(404, str(e)) from e
@@ -68,6 +69,7 @@ def register(app: FastAPI) -> None:
                 for event in orch.handle_turn_stream(
                     req.text, persona_id=req.persona_id, space_id=req.space_id, reference_now=ref_now,
                     images=req.images or None,
+                    file_ids=req.file_ids or None,
                 ):
                     yield f"data: {_json.dumps(event, ensure_ascii=False, default=str)}\n\n"
             except KeyError as e:

@@ -41,6 +41,7 @@ def register(app: FastAPI) -> None:
             verify_model=(payload.verify_model if payload.verify_model is not None else current.verify_model).strip(),
             vision_model=(payload.vision_model if payload.vision_model is not None else current.vision_model).strip(),
             verify_strictness=(payload.verify_strictness if payload.verify_strictness is not None else current.verify_strictness),
+            verify_max_checks=(payload.verify_max_checks if payload.verify_max_checks is not None else current.verify_max_checks),
             site_url=(payload.site_url if payload.site_url is not None else current.site_url).strip(),
             site_name=(payload.site_name if payload.site_name is not None else current.site_name).strip(),
             temperature=(payload.temperature if payload.temperature is not None else current.temperature),
@@ -79,6 +80,7 @@ def register(app: FastAPI) -> None:
             summarizer_llm=new_summarizer_llm,
             verifier_llm=new_verifier_llm,
             verify_strictness=new_config.verify_strictness,
+            verify_max_checks=new_config.verify_max_checks,
             vision_llm=new_vision_llm,
             target_free_ratio=new_config.target_free_ratio(),
         )

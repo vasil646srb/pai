@@ -13,6 +13,7 @@ class ChatRequest(BaseModel):
     space_id: str = "personal"
     reference_now: str | None = None
     images: list[str] = Field(default_factory=list)
+    file_ids: list[str] = Field(default_factory=list)
 
 
 class ToolTraceItem(BaseModel):
@@ -176,6 +177,7 @@ class LLMSettingsUpdate(BaseModel):
     verify_model: str | None = None
     vision_model: str | None = None
     verify_strictness: int | None = Field(default=None, ge=1, le=5)
+    verify_max_checks: int | None = Field(default=None, ge=1, le=5)
     site_url: str | None = None
     site_name: str | None = None
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)

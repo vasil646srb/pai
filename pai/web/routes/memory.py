@@ -80,9 +80,21 @@ def register(app: FastAPI) -> None:
         return {"results": results}
 
     @app.post("/memory/compress")
-    def compress(req: CompressRequest, orch: Orchestrator = Depends(get_orchestrator)):
-        created = orch.run_background_compression(space_id=req.space_id, force_top=req.force_top)
-        return {"created_node_ids": [n.id for n in created], "count": len(created)}
+    def compress(req: CompressRequest, orch: Orchestrator = Depends(get_orchestrator),
+                 storage: Storage = Depends(get_storage)):
+        # space_id="all": compress every space that has nodes. One failing space does not stop the rest.
+        spaces = list(storage.stats()["by_space"].keys()) if req.space_id == "all" else [req.space_id]
+        created_ids: list[str] = []
+        by_space: dict[str, dict] = {}
+        for sid in spaces:
+            try:
+                created = orch.run_background_compression(space_id=sid, force_top=req.force_top)
+            except Exception as e:  # keep compressing the other spaces
+                by_space[sid] = {"error": f"{type(e).__name__}: {e}"}
+                continue
+            created_ids += [n.id for n in created]
+            by_space[sid] = {"count": len(created)}
+        return {"created_node_ids": created_ids, "count": len(created_ids), "by_space": by_space}
 
     @app.get("/actions/log")
     def action_log(

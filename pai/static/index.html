@@ -16,6 +16,15 @@
 <link rel="stylesheet" href="/static/style.css?v=__BUILD__" />
 </head>
 <body>
+<div id="authGate" class="auth-gate" hidden>
+  <form id="authForm" class="auth-card">
+    <div class="auth-title">PAI</div>
+    <input id="authPassword" type="password" autocomplete="current-password" placeholder="Пароль" required />
+    <button class="btn primary" id="btnLogin" type="submit">Войти</button>
+    <div class="auth-msg" id="authMsg"></div>
+  </form>
+  <a class="auth-guest" href="/guest">Перейти на страницу для гостей</a>
+</div>
 <div id="app">
 
   <div class="topbar">
@@ -77,7 +86,9 @@
         <div class="quick-replies" id="quickReplies" hidden></div>
         <div class="chat-input-row">
           <button class="chat-attach-btn" id="btnAttachImage" type="button" title="Прикрепить изображение">📎</button>
+          <button class="chat-attach-btn" id="btnAttachFile" type="button" title="Прикрепить файл (txt, md, код, pdf, docx)">📄</button>
           <input type="file" id="chatImageInput" accept="image/*" multiple hidden />
+          <input type="file" id="chatFileInput" multiple hidden accept=".txt,.md,.csv,.tsv,.json,.yaml,.yml,.xml,.log,.ini,.toml,.py,.js,.ts,.tsx,.jsx,.html,.css,.sh,.sql,.rs,.go,.java,.c,.cpp,.h,.rb,.php,.swift,.kt,.pdf,.docx" />
           <div class="chat-input-col">
             <div class="chat-attachments" id="chatAttachments"></div>
             <textarea id="chatInput" placeholder="Сообщение… (Enter — новая строка, Ctrl+Enter — отправить)"></textarea>
@@ -112,6 +123,7 @@
       <p class="page-sub tight">Сжатие уже запускается автоматически при снижении свободного KV-кеша ниже 50% (см. выше). Кнопка ниже — для принудительного запуска вне очереди.</p>
       <div class="card" style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
         <select id="compressSpace">
+          <option value="all">все пространства</option>
           <option value="personal">personal</option>
           <option value="work">work</option>
           <option value="health">health</option>
@@ -322,6 +334,9 @@
     <section class="view" id="view-usage">
       <h1 class="page-title">Usage / стоимость</h1>
       <p class="page-sub">Оценка токенов и стоимости по всем вызовам модели с момента запуска сервера (§18 ТЗ).</p>
+      <div class="section-title" style="display:flex; align-items:center; gap:12px;">Баланс OpenRouter <button class="btn ghost sm" id="btnBalanceRefresh" type="button">Обновить</button></div>
+      <div class="grid grid-4" id="balanceCards"></div>
+      <p class="page-sub tight" id="balanceNote"></p>
       <div class="grid grid-4" id="usageCards"></div>
       <div class="grid grid-4 usage-extra-grid">
         <div class="card stat-card"><div class="stat-label">скорость генерации</div><div class="stat-value" id="usageSpeed">—</div><div class="stat-hint">output tokens / latency</div></div>
@@ -480,7 +495,15 @@
               <input type="range" id="llmVerifyStrictness" min="1" max="5" step="1" value="3" />
               <span class="mono" id="llmVerifyStrictnessLabel" style="min-width:120px;font-size:12.5px;"></span>
             </div>
-            <div class="field-hint">Насколько придирчиво проверять ответ: 1 — пропускает почти любой ответ по теме, 5 — не пропускает любой пробел. Ответ, который не проходит, уходит на переделку.</div>
+            <div class="field-hint">Насколько придирчиво проверять ответ: 1 — пропускает почти любой ответ по теме, 5 — не пропускает любой пробел.</div>
+          </div>
+          <div class="field field-wide">
+            <label>Сколько раз проверять ответ</label>
+            <div class="model-row">
+              <input type="range" id="llmVerifyMaxChecks" min="1" max="5" step="1" value="2" />
+              <span class="mono" id="llmVerifyMaxChecksLabel" style="min-width:120px;font-size:12.5px;"></span>
+            </div>
+            <div class="field-hint">Всего проверок на один ответ. 1 — только проверка и отчёт. 2 — одна переделка по плану и повторная проверка (по умолчанию). Если ответ так и не прошёл, он остаётся в чате, а под ним выводятся отчёт, чего не хватает и план исправления.</div>
           </div>
           <div class="field field-wide">
             <label>Модель для изображений <span class="opt-tag">опционально</span></label>
@@ -631,6 +654,7 @@
   });
 })();
 </script>
+<script src="/static/md.js?v=__BUILD__"></script>
 <script src="/static/app.js?v=__BUILD__"></script>
 <script src="/static/services.js?v=__BUILD__"></script>
 

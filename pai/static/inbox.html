@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Сообщения</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="guest-body">
+<main class="guest-wrap">
+  <header class="guest-head">
+    <h1>Сообщения от посетителей</h1>
+    <p class="guest-sub"><a href="/">← в приложение</a></p>
+  </header>
+  <div class="inbox-tools">
+    <label><input type="checkbox" id="onlyUnread" /> только новые</label>
+    <button class="btn ghost sm" id="btnRefresh" type="button">Обновить</button>
+  </div>
+  <div id="inboxMsg" class="guest-hint"></div>
+  <div id="inboxList" class="inbox-list"></div>
+</main>
+<script src="/static/inbox.js"></script>
+</body>
+</html>

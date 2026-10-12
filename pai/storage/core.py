@@ -70,6 +70,51 @@ CREATE TABLE IF NOT EXISTS action_log (
 
 CREATE INDEX IF NOT EXISTS idx_action_log_ts ON action_log(ts);
 CREATE INDEX IF NOT EXISTS idx_action_log_kind ON action_log(kind);
+
+-- uploaded files: original on disk (see storage/files.py), metadata and extracted text here
+CREATE TABLE IF NOT EXISTS uploaded_files (
+    id TEXT PRIMARY KEY,
+    sha256 TEXT NOT NULL,
+    space_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    mime TEXT NOT NULL,
+    size_orig INTEGER NOT NULL,
+    size_stored INTEGER NOT NULL,
+    codec TEXT NOT NULL,            -- 'zstd' | 'gzip' | 'raw'
+    note TEXT NOT NULL DEFAULT '',
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_uploaded_sha ON uploaded_files(sha256);
+CREATE TABLE IF NOT EXISTS uploaded_file_text (
+    file_id TEXT PRIMARY KEY REFERENCES uploaded_files(id),
+    chars INTEGER NOT NULL,
+    codec TEXT NOT NULL,
+    body BLOB NOT NULL
+);
+
+-- messages from site visitors to the owner
+CREATE TABLE IF NOT EXISTS inbox_messages (
+    id TEXT PRIMARY KEY,
+    created_at REAL NOT NULL,
+    guest_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    text TEXT NOT NULL,
+    read INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_inbox_created ON inbox_messages(created_at);
+
+-- private guest rooms (see storage/guest_rooms.py)
+CREATE TABLE IF NOT EXISTS guest_rooms (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    pw_hash TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS guest_room_tokens (
+    token_hash TEXT PRIMARY KEY,
+    room_id TEXT NOT NULL,
+    expires_at REAL NOT NULL
+);
 """
 
 

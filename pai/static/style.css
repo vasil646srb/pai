@@ -1424,3 +1424,63 @@ img, svg, video, canvas { max-width: 100%; height: auto; }
     line-height: 1.4;
   }
 }
+
+/* answer-check verdict under a reply */
+.check-block { margin-top: 10px; padding: 10px 12px; border-left: 3px solid #d9a441; background: var(--surface-2); border-radius: 6px; font-size: 13px; color: var(--text-dim); }
+.check-block.error { border-left-color: var(--danger); }
+.check-title { font-weight: 600; color: var(--text); margin-bottom: 4px; }
+.check-text { margin-top: 4px; line-height: 1.45; }
+.check-block ol { margin: 4px 0 0 18px; padding: 0; }
+
+/* uploaded files: chips above the input and under the user's message */
+.file-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.file-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); font-size: 12.5px; color: var(--text-dim); }
+.file-chip .remove { border: 0; background: none; color: var(--text-faint); cursor: pointer; font-size: 14px; line-height: 1; }
+
+/* sign-in gate */
+.auth-gate { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; background: var(--bg); padding: 16px; }
+.auth-gate[hidden] { display: none; }
+.auth-card { width: min(360px, 100%); display: flex; flex-direction: column; gap: 12px; padding: 20px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+.auth-title { font-size: 20px; font-weight: 600; color: var(--text); }
+.auth-card input { font-size: 16px; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); width: 100%; box-sizing: border-box; }
+.auth-card .btn { width: 100%; padding: 10px; font-size: 16px; }
+.auth-msg { font-size: 13px; color: var(--danger); min-height: 1em; }
+
+/* public guest page and owner inbox */
+.guest-body { background: var(--bg); color: var(--text); margin: 0; min-height: 100vh; }
+.guest-wrap { max-width: 720px; margin: 0 auto; padding: 16px; box-sizing: border-box; display: flex; flex-direction: column; gap: 12px; }
+.guest-head h1 { margin: 0; font-size: 20px; }
+.guest-sub { margin: 4px 0 0; color: var(--text-dim); font-size: 14px; }
+.guest-sub a { color: var(--accent-live); }
+.guest-tabs { display: flex; gap: 8px; }
+.guest-tabs button { flex: 1; padding: 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-dim); font-size: 15px; cursor: pointer; }
+.guest-tabs button.active { color: var(--text); border-color: var(--accent-live); }
+.guest-log { display: flex; flex-direction: column; gap: 8px; min-height: 240px; max-height: 60vh; overflow-y: auto; padding: 4px; }
+.guest-msg { padding: 10px 12px; border-radius: 10px; background: var(--surface-2); white-space: pre-wrap; word-break: break-word; font-size: 15px; line-height: 1.45; max-width: 92%; }
+.guest-msg.me { align-self: flex-end; background: var(--surface-3); }
+.guest-msg.err { color: var(--danger); }
+.guest-previews { display: flex; gap: 6px; flex-wrap: wrap; }
+.guest-form { display: flex; gap: 8px; align-items: flex-end; }
+.guest-form textarea, .guest-msgform textarea, .guest-msgform input { flex: 1; font-size: 16px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); box-sizing: border-box; resize: vertical; }
+.guest-msgform { display: flex; flex-direction: column; gap: 10px; }
+.guest-msgform .btn, .guest-form .btn { padding: 10px 14px; font-size: 15px; }
+.guest-icon { font-size: 20px; background: none; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; cursor: pointer; }
+.guest-hint { font-size: 13px; color: var(--text-faint); min-height: 1em; }
+.inbox-tools { display: flex; gap: 12px; align-items: center; justify-content: space-between; font-size: 14px; color: var(--text-dim); }
+.inbox-list { display: flex; flex-direction: column; gap: 10px; }
+.inbox-card { padding: 12px; border-radius: 10px; background: var(--surface); border: 1px solid var(--border); }
+.inbox-card.unread { border-left: 3px solid var(--accent-live); }
+.inbox-head { font-size: 13px; color: var(--text-dim); margin-bottom: 6px; }
+.inbox-text { white-space: pre-wrap; word-break: break-word; font-size: 15px; line-height: 1.45; }
+.inbox-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+
+/* guest rooms */
+.guest-h2 { margin: 12px 0 0; font-size: 16px; color: var(--text); }
+.rooms-list { display: flex; flex-direction: column; gap: 8px; }
+.room-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.room-row .room-name { flex: 1; min-width: 120px; color: var(--text); }
+.room-row input { font-size: 16px; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); width: 160px; }
+.room-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; color: var(--text); }
+
+.auth-guest { text-align: center; font-size: 14px; color: var(--accent-live); text-decoration: none; margin-top: 12px; display: block; }
+.auth-guest:hover { text-decoration: underline; }

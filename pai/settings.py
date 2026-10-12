@@ -38,8 +38,9 @@ class Settings:
     timezone_name: str = ""
     tail_length: int = 10
     verify_enabled: bool = True
-    verify_revisions: int = 1
     services_enabled: bool = True
+    auth_password: str = ""
+    auth_disabled: bool = False
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -48,17 +49,14 @@ class Settings:
             tail = max(2, min(int(env.get("PAI_TAIL_LENGTH", "10")), 100))
         except ValueError:
             tail = 10
-        try:
-            revisions = max(0, min(int(env.get("PAI_VERIFY_REVISIONS", "1")), 5))
-        except ValueError:
-            revisions = 1
         return cls(
             data_dir=env.get("PAI_DATA_DIR") or "./pai_data",
             timezone_name=env.get("PAI_TIMEZONE", ""),
             tail_length=tail,
             verify_enabled=_flag(env, "PAI_VERIFY", "1"),
-            verify_revisions=revisions,
             services_enabled=_flag(env, "PAI_SERVICES", "1"),
+            auth_password=env.get("PAI_PASSWORD", ""),
+            auth_disabled=_flag(env, "PAI_AUTH_DISABLED", "0"),
         )
 
 

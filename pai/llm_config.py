@@ -16,6 +16,13 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 
+def _clamp_checks(value) -> int:
+    try:
+        return max(1, min(5, int(value)))
+    except (TypeError, ValueError):
+        return 2
+
+
 def _clamp_strictness(value) -> int:
     try:
         return max(1, min(5, int(value)))
@@ -42,6 +49,8 @@ class LLMConfig:
     # Answer-check strictness, 1 (lenient) .. 5 (very strict). Minimum usefulness score
     # the checker must give for an answer to pass is derived from it (see dialog.py).
     verify_strictness: int = 3
+    # How many answer checks run per turn (1 = check and show only, 2 = one rewrite + recheck).
+    verify_max_checks: int = 2
     site_url: str = ""
     site_name: str = ""
     # Generation parameters — the ones that actually change what comes back
@@ -181,6 +190,7 @@ class LLMConfigStore:
             verify_model=raw.get("verify_model", "") or "",
             vision_model=raw.get("vision_model", "") or "",
             verify_strictness=_clamp_strictness(raw.get("verify_strictness", 3)),
+            verify_max_checks=_clamp_checks(raw.get("verify_max_checks", 2)),
             site_url=raw.get("site_url", "") or "",
             site_name=raw.get("site_name", "") or "",
             temperature=temperature,
