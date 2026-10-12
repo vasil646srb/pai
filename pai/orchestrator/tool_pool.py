@@ -20,6 +20,9 @@ if TYPE_CHECKING:
 
 MAX_TOOL_POOL_SIZE = 8
 _TEXT_PLAN_RE = re.compile(r"^\s*Tool pool plan:\s*(\[.*\])\s*$", re.DOTALL)
+# Some models write a call as text, one per line: name({"arg": ...}). Only names the
+# persona may use are executed (normalization checks that); the text is removed from the reply.
+_TEXT_CALL_RE = re.compile(r"(?m)^\s*([A-Za-z_]\w*)\s*\((\{.*\})\)\s*$")
 # Some models write the planning call as markup in the text instead of a real call:
 #   <tool_call>plan_tool_pool<arg_key>calls</arg_key><arg_value>[...]</arg_value></tool_call>
 _MARKUP_PLAN_RE = re.compile(
@@ -184,6 +187,17 @@ class ToolPoolPlanner:
                 if isinstance(pool, list) and pool:
                     result["content"] = (content[:m.start()] + content[m.end():]).strip()
                     return pool, None
+            text_calls = []
+            for tm in _TEXT_CALL_RE.finditer(content):
+                try:
+                    args = json.loads(tm.group(2))
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(args, dict):
+                    text_calls.append({"name": tm.group(1), "arguments": args})
+            if text_calls:
+                result["content"] = _TEXT_CALL_RE.sub("", content).strip()
+                return text_calls, None
         if calls:
             # Backward-compatible interpretation for providers/models that
             # still emit ordinary tool calls despite the planning schema.

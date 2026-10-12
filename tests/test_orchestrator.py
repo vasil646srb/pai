@@ -4,10 +4,17 @@ import pytest
 
 from pai.llm import LLMError, MockLLM
 from pai.orchestrator import MAX_TOOL_ITERATIONS, Orchestrator, _ITERATION_LIMIT_FALLBACK
+from pai.tools import ToolDispatcher
 from pai.personas import PersonaRegistry, RulesManager, default_personas
 from pai.skills import default_skill_catalog
 from pai.storage import Storage
 from pai.tools import ToolError
+
+
+def _plan(*calls):
+    """Model reply that plans one tool pool (the current protocol), listing the calls."""
+    return [{"id": "p", "name": "plan_tool_pool",
+             "arguments": {"calls": [{"name": c["name"], "arguments": c["arguments"]} for c in calls]}}]
 
 
 @pytest.fixture
@@ -16,7 +23,7 @@ def orch(tmp_path):
     llm = MockLLM()
     personas = default_personas()
     skills = default_skill_catalog()
-    o = Orchestrator(storage, llm, personas, skills, timezone_name="UTC")
+    o = Orchestrator(storage, llm, personas, skills, timezone_name="UTC", verify_enabled=False)
     yield o, llm
     storage.close()
 
@@ -56,7 +63,7 @@ def test_handle_turn_executes_tool_call_then_replies(orch):
     o, llm = orch
     node = o.tree.ingest_raw("важный факт про проект", space_id="personal")
 
-    llm.queue_response(tool_calls=[{"id": "1", "name": "get_fragment", "arguments": {"id": node.id}}])
+    llm.queue_response(tool_calls=_plan({"name": "get_fragment", "arguments": {"id": node.id}}))
     llm.queue_response(content="Нашёл: важный факт про проект")
 
     result = o.handle_turn("что там было про проект?", persona_id="brain", space_id="personal")
@@ -81,15 +88,15 @@ def test_handle_turn_executes_multiple_tools_as_one_pool_before_next_llm_call(or
         return {"name": name, "value": arguments["value"]}
 
     monkeypatch.setattr(
-        __import__("pai.orchestrator", fromlist=["ToolDispatcher"]).ToolDispatcher,
+        __import__("pai.tools", fromlist=["ToolDispatcher"]).ToolDispatcher,
         "dispatch",
         dispatch_in_parallel,
     )
 
-    llm.queue_response(tool_calls=[
-        {"id": "1", "name": "calculate_time_delta", "arguments": {"date1": "2026-01-01", "date2": "now", "value": "a"}},
-        {"id": "2", "name": "calculate_time_delta", "arguments": {"date1": "2026-01-02", "date2": "now", "value": "b"}},
-    ])
+    llm.queue_response(tool_calls=_plan(
+        {"name": "calculate_time_delta", "arguments": {"date1": "2026-01-01", "date2": "now", "value": "a"}},
+        {"name": "calculate_time_delta", "arguments": {"date1": "2026-01-02", "date2": "now", "value": "b"}},
+    ))
     llm.queue_response(content="Оба результата получены.")
 
     result = o.handle_turn("выполни два инструмента", persona_id="brain")
@@ -98,11 +105,11 @@ def test_handle_turn_executes_multiple_tools_as_one_pool_before_next_llm_call(or
     assert len(chat_calls) == 2
 
     assert len(chat_calls) == 2
-    assert chat_calls[0]["tool_choice"]["function"]["name"] == "plan_tool_pool"
+    assert any(t["function"]["name"] == "plan_tool_pool" for t in chat_calls[0]["tools"])
     analysis_messages = chat_calls[1]["messages"]
-    results_message = next(m for m in analysis_messages if m["role"] == "user" and m["content"].startswith("Results of the full pool execution:"))
-    assert '"value": "a"' in results_message["content"]
-    assert '"value": "b"' in results_message["content"]
+    results_text = "".join(str(m["content"]) for m in analysis_messages if m["role"] == "tool")
+    assert '"value": "a"' in results_text
+    assert '"value": "b"' in results_text
 
 def test_handle_turn_tool_loop_forces_final_answer_after_max_iterations(orch):
     """After MAX_TOOL_ITERATIONS rounds of tool calls with no answer, the
@@ -110,16 +117,15 @@ def test_handle_turn_tool_loop_forces_final_answer_after_max_iterations(orch):
     iteration-limit placeholder — the model gets a real chance to
     synthesize an answer from what it already gathered."""
     o, llm = orch
-    for _ in range(MAX_TOOL_ITERATIONS):
-        llm.queue_response(tool_calls=[{"id": "1", "name": "calculate_time_delta",
-                                          "arguments": {"date1": "2026-01-01", "date2": "now"}}])
+    for i in range(MAX_TOOL_ITERATIONS):
+        llm.queue_response(tool_calls=_plan({"name": "calculate_time_delta", "arguments": {"date1": f"2026-01-{i + 1:02d}", "date2": "now"}}))
     llm.queue_response(content="Не удалось найти нужный факт, уточните запрос.")
 
     result = o.handle_turn("сколько дней с нового года?", persona_id="brain")
     assert result.reply == "Не удалось найти нужный факт, уточните запрос."
     assert len(result.tool_trace) == MAX_TOOL_ITERATIONS
     # the forced final call must not offer tools — the model can't keep looping
-    assert next(c for c in reversed(llm.calls) if "messages" in c)["tools"] is None
+    assert next(c for c in reversed(llm.calls) if "messages" in c)["tool_choice"] == "none"
 
 
 def test_handle_turn_tool_loop_falls_back_if_forced_call_also_empty(orch):
@@ -127,9 +133,8 @@ def test_handle_turn_tool_loop_falls_back_if_forced_call_also_empty(orch):
     tool calls, since a MockLLM queue doesn't enforce tools=None), the user
     still gets a plain, understandable message — never raw placeholder text."""
     o, llm = orch
-    for _ in range(MAX_TOOL_ITERATIONS + 1):
-        llm.queue_response(tool_calls=[{"id": "1", "name": "calculate_time_delta",
-                                          "arguments": {"date1": "2026-01-01", "date2": "now"}}])
+    for i in range(MAX_TOOL_ITERATIONS + 1):
+        llm.queue_response(tool_calls=_plan({"name": "calculate_time_delta", "arguments": {"date1": f"2026-01-{i + 1:02d}", "date2": "now"}}))
 
     result = o.handle_turn("сколько дней с нового года?", persona_id="brain")
     assert "лимит" not in result.reply.lower()
@@ -142,15 +147,14 @@ def test_handle_turn_tool_loop_falls_back_if_forced_call_errors(tmp_path):
     propagating the exception to the caller."""
     class FlakyLLM(MockLLM):
         def chat(self, messages, tools=None, **kwargs):
-            if tools is None:
+            if kwargs.get("tool_choice") == "none":  # the forced final call
                 raise LLMError("backend unreachable")
             return super().chat(messages, tools=tools, **kwargs)
 
     storage = Storage(tmp_path / "data")
     flaky = FlakyLLM()
     for _ in range(MAX_TOOL_ITERATIONS):
-        flaky.queue_response(tool_calls=[{"id": "1", "name": "calculate_time_delta",
-                                            "arguments": {"date1": "2026-01-01", "date2": "now"}}])
+        flaky.queue_response(tool_calls=_plan({"name": "calculate_time_delta", "arguments": {"date1": "2026-01-01", "date2": "now"}}))
     o = Orchestrator(storage, flaky, default_personas(), default_skill_catalog(), timezone_name="UTC")
 
     result = o.handle_turn("сколько дней с нового года?", persona_id="brain")
@@ -187,18 +191,19 @@ def test_background_compression_runs_and_creates_summary(orch):
     created = o.run_background_compression(space_id="personal")
     assert len(created) >= 1
     # background summary usage recorded
-    assert o.usage.summary()["calls_by_kind"].get("background_summary", 0) >= 1
+    assert o.usage.summary()["calls_by_kind"].get("compression", 0) >= 1
 
 
 def test_persona_tool_permissions_enforced_in_turn(orch):
     o, llm = orch
     persona = o.personas.get("brain")
     persona.tool_permissions = []  # strip all tool access
-    llm.queue_response(tool_calls=[{"id": "1", "name": "get_fragment", "arguments": {"id": "x"}}])
+    llm.queue_response(tool_calls=_plan({"name": "get_fragment", "arguments": {"id": "x"}}))
     llm.queue_response(content="fallback reply")
 
     result = o.handle_turn("test", persona_id="brain")
-    assert result.tool_trace[0]["result"]["error"] is not None
+    # calls outside the persona's filtered schema are never executed, so nothing is traced
+    assert result.tool_trace == []
     assert result.reply == "fallback reply"
 
 
@@ -206,15 +211,14 @@ def test_handle_turn_stream_forces_final_answer_after_max_iterations(orch):
     """The streaming path hits the same iteration-limit fallback as the
     non-streaming one, via the same forced tools-free call."""
     o, llm = orch
-    for _ in range(MAX_TOOL_ITERATIONS):
-        llm.queue_response(tool_calls=[{"id": "1", "name": "calculate_time_delta",
-                                          "arguments": {"date1": "2026-01-01", "date2": "now"}}])
+    for i in range(MAX_TOOL_ITERATIONS):
+        llm.queue_response(tool_calls=_plan({"name": "calculate_time_delta", "arguments": {"date1": f"2026-01-{i + 1:02d}", "date2": "now"}}))
     llm.queue_response(content="Готовый ответ после форс-завершения.")
 
     events = list(o.handle_turn_stream("сколько дней с нового года?", persona_id="brain"))
     done = next(e for e in events if e["type"] == "done")
     assert done["reply"] == "Готовый ответ после форс-завершения."
-    assert next(c for c in reversed(llm.calls) if "messages" in c)["tools"] is None
+    assert next(c for c in reversed(llm.calls) if "messages" in c)["tool_choice"] == "none"
 
 
 def test_handle_turn_returns_reasoning_when_provided(orch):
@@ -251,7 +255,7 @@ def test_handle_turn_stream_yields_reasoning_delta(orch):
     events = list(o.handle_turn_stream("Привет", persona_id="brain"))
     reasoning_events = [e for e in events if e["type"] == "reasoning_delta"]
     assert reasoning_events
-    assert "".join(e["text"] for e in reasoning_events) == "цепочка мыслей"
+    assert "".join(e["text"] for e in reasoning_events).strip() == "цепочка мыслей"
     done = next(e for e in events if e["type"] == "done")
     assert done["reasoning"] == "цепочка мыслей"
     assert done["reply"] == "Готовый ответ"
@@ -268,7 +272,7 @@ def test_tool_planner_creates_pool_then_analysis_call(orch, monkeypatch):
         return {"value": arguments["value"]}
 
     monkeypatch.setattr(
-        __import__("pai.orchestrator", fromlist=["ToolDispatcher"]).ToolDispatcher,
+        __import__("pai.tools", fromlist=["ToolDispatcher"]).ToolDispatcher,
         "dispatch",
         dispatch,
     )
@@ -288,6 +292,17 @@ def test_tool_planner_creates_pool_then_analysis_call(orch, monkeypatch):
     assert len(result.tool_trace) == 2
     chat_calls = [c for c in llm.calls if "messages" in c]
     assert len(chat_calls) == 2
-    assert chat_calls[0]["tool_choice"] == {"type": "function", "function": {"name": "plan_tool_pool"}}
+    assert chat_calls[0]["tool_choice"] == "auto"
     assert chat_calls[1]["tools"][0]["function"]["name"] == "plan_tool_pool"
     assert sorted(started) == ["a", "b"]
+
+
+def test_call_written_as_text_is_executed_not_shown(orch):
+    """A call written as plain text (name({...})) runs as a tool call and does not
+    become the visible answer."""
+    o, llm = orch
+    llm.queue_response(content='calculate_time_delta({"date1": "2026-01-01", "date2": "now"})')
+    llm.queue_response(content="Прошло несколько месяцев.")
+    result = o.handle_turn("сколько дней с нового года?", persona_id="brain")
+    assert [t["name"] for t in result.tool_trace] == ["calculate_time_delta"]
+    assert result.reply == "Прошло несколько месяцев."

@@ -44,10 +44,11 @@ def test_tool_permission_denied_raises(storage):
         dispatcher.dispatch("search_archive", {"query": "x"}, persona=persona)
 
 
-def test_unknown_tool_raises(storage):
+def test_unknown_tool_returns_tool_failed(storage):
+    # Unknown tools are reported back to the model as a failed call, not raised.
     dispatcher = ToolDispatcher(storage)
-    with pytest.raises(ToolError):
-        dispatcher.dispatch("nonexistent_tool", {})
+    result = dispatcher.dispatch("nonexistent_tool", {})
+    assert result["tool_failed"] is True and "nonexistent_tool" in result["error"]
 
 
 def test_search_archive_via_dispatcher(storage):

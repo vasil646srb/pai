@@ -16,7 +16,10 @@ def test_tool_result_is_persisted(tmp_path):
     from pai.tree import TreeBuilder
     orch.tree = TreeBuilder(storage, llm=None)
 
-    node = orch._persist_tool_result(
+    from pai.orchestrator.tool_pool import ToolPoolPlanner
+    pool = ToolPoolPlanner.__new__(ToolPoolPlanner)
+    pool.tree = orch.tree
+    node = pool._persist_tool_result(
         "web_fetch",
         {"url": "https://example.test", "mode": "text"},
         {"status": 200, "result": "важные данные"},

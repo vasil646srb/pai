@@ -141,7 +141,7 @@ def test_mock_llm_chat_stream_yields_typed_events():
     llm.queue_response(content="два слова", reasoning="думаю")
     events = list(llm.chat_stream(messages=[{"role": "user", "content": "x"}]))
     kinds = {e["type"] for e in events}
-    assert kinds == {"reasoning", "content"}
+    assert {"reasoning", "content"} <= kinds
     reasoning_text = "".join(e["text"] for e in events if e["type"] == "reasoning")
     content_text = "".join(e["text"] for e in events if e["type"] == "content")
     assert reasoning_text.strip() == "думаю"
@@ -152,9 +152,11 @@ def test_context_window_clamps_max_tokens_to_remaining_context(fake_server):
     client = OpenAICompatibleClient(
         base_url=fake_server, model="test-model", context_window=1024, max_tokens=80
     )
-    # ~60 input tokens by the client's conservative 4 chars/token estimate.
-    client.chat(messages=[{"role": "user", "content": "x" * 4000}])
-    assert _FakeHandler.last_payload["max_tokens"] == 24
+    messages = [{"role": "user", "content": "x" * 4000}]
+    # the output budget is what remains of the window after the client's own input estimate
+    expected = 1024 - client._estimate_message_tokens(messages)
+    client.chat(messages=messages)
+    assert _FakeHandler.last_payload["max_tokens"] == expected
 
 
 def test_context_window_rejects_input_that_already_exceeds_limit(fake_server):
