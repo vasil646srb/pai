@@ -346,6 +346,31 @@ PERSONA_TOOL_SCHEMAS: list[dict] = [
 
 
 TOOL_SCHEMAS.extend(PERSONA_TOOL_SCHEMAS)
+TOOL_SCHEMAS.append({
+    "type": "function",
+    "function": {
+        "name": "telegram_read",
+        "description": "Check the owner's Telegram group and reading channels for new messages. Returns the "
+                        "unread ones and marks them read. Use it when asked about new messages or before answering in the group.",
+        "parameters": {"type": "object", "properties": {
+            "channel": {"type": "string", "enum": ["all", "group", "public", "private"], "description": "Which chat to check."},
+        }, "required": []},
+    },
+})
+TOOL_SCHEMAS.append({
+    "type": "function",
+    "function": {
+        "name": "telegram_post",
+        "description": "Publish a text post to one of the owner's Telegram channels. 'private' is the owner's "
+                        "private channel and goes out at once. 'public' is the public channel: the post is queued "
+                        "and goes out only after the owner approves it, so tell the owner it is waiting. "
+                        "Plain text, up to 4000 characters.",
+        "parameters": {"type": "object", "properties": {
+            "channel": {"type": "string", "enum": ["public", "private", "group"], "description": "Which channel."},
+            "text": {"type": "string", "description": "Post text."},
+        }, "required": ["channel", "text"]},
+    },
+})
 
 
 BRAIN_ONLY_TOOLS = frozenset({"list_personas", "get_persona", "create_persona", "edit_persona"})

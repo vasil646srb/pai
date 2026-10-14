@@ -58,6 +58,7 @@
     <div class="nav-item" data-view="usage"><span class="ico">▸</span>Usage / стоимость</div>
     <div class="nav-item" data-view="actionlog"><span class="ico">▸</span>Лог действий</div>
     <div class="nav-item" data-view="services"><span class="ico">▸</span>Службы</div>
+    <div class="nav-item" data-view="telegram"><span class="ico">▸</span>Telegram</div>
     <div class="nav-item" data-view="settings"><span class="ico">▸</span>Настройки</div>
   </div>
 
@@ -242,6 +243,58 @@
     </section>
 
     <!-- ===================== SKILLS ===================== -->
+    <section class="view" id="view-telegram">
+      <div class="page-head"><h1>Telegram</h1>
+        <p class="page-sub">Публикации бота в каналы. Публичный канал: пост уходит только после вашего подтверждения. Приватный: сразу.</p></div>
+      <div class="card">
+        <div class="field"><label>Токен бота (BotFather)</label>
+          <input type="password" id="tgToken" placeholder="вставьте новый токен, чтобы заменить" autocomplete="off" />
+          <div class="field-hint" id="tgTokenHint"></div></div>
+        <div class="field"><label>Публичный канал (@username или -100…)</label>
+          <input type="text" id="tgPublicChat" placeholder="@my_channel" /></div>
+        <div class="field"><label>Публичный: режим</label>
+          <select id="tgPublicMode"><option value="approve">подтверждение</option><option value="auto">сразу</option></select></div>
+        <div class="field"><label>Приватный канал (@username или -100…)</label>
+          <input type="text" id="tgPrivateChat" placeholder="-100…" /></div>
+        <div class="field"><label>Приватный: режим</label>
+          <select id="tgPrivateMode"><option value="auto">сразу</option><option value="approve">подтверждение</option></select></div>
+        <div class="field"><label>Группа (@username или -100…)</label>
+          <input type="text" id="tgGroupChat" placeholder="-100…" /></div>
+        <div class="field"><label>Группа: публикации</label>
+          <select id="tgGroupMode"><option value="approve">подтверждение</option><option value="auto">сразу</option></select>
+          <div class="field-hint">Бот читает сообщения группы. Чтобы видеть все сообщения, а не только команды и упоминания, отключите privacy mode в @BotFather (/setprivacy → Disable) и добавьте бота в группу заново.</div></div>
+        <div class="field"><label class="reasoning-toggle" style="font-size:13px;">
+          <input type="checkbox" id="tgAutoReply" /> Отвечать в группе автоматически</label>
+          <div class="field-hint">Новые сообщения классифицирует Jev. Если нужен ответ, пишет персона brain. Ответ идёт в группу через очередь, если режим группы «подтверждение».</div></div>
+        <div class="llm-settings-actions">
+          <button class="btn primary" id="tgSave">Сохранить</button>
+          <button class="btn ghost" id="tgCheck">Проверить бота и каналы</button></div>
+        <p class="page-sub" id="tgStatus"></p>
+        <pre class="mono al-pre" id="tgCheckOut"></pre>
+      </div>
+      <div class="card">
+        <div class="section-title sub">Написать в канал или группу</div>
+        <div class="field"><label>Куда</label>
+          <select id="tgSendChannel"><option value="private">приватный (сразу)</option><option value="public">публичный (через подтверждение)</option><option value="group">группа (через подтверждение)</option></select></div>
+        <div class="field"><label>Текст</label><textarea id="tgSendText" rows="4" placeholder="до 4000 символов"></textarea></div>
+        <div class="llm-settings-actions"><button class="btn primary" id="tgSend">Отправить</button></div>
+        <p class="page-sub" id="tgSendStatus"></p>
+      </div>
+      <div class="card">
+        <div class="section-title sub">Новые сообщения (группа и каналы для чтения)</div>
+        <div class="llm-settings-actions"><button class="btn ghost sm" id="tgPoll">Проверить новые сообщения</button>
+          <button class="btn ghost sm" id="tgProcess">Обработать сейчас</button></div>
+        <div id="tgInbox"><div class="empty-state">загрузка…</div></div>
+      </div>
+      <div class="card">
+        <div class="section-title sub">Очередь на подтверждение</div>
+        <div id="tgQueue"><div class="empty-state">загрузка…</div></div>
+        <button class="btn ghost sm" id="tgQueueRefresh">Обновить</button>
+        <div class="section-title sub" style="margin-top:14px;">История</div>
+        <div id="tgHistory"></div>
+      </div>
+    </section>
+
     <section class="view" id="view-skills">
       <h1 class="page-title">Скилы</h1>
       <p class="page-sub">Модульные инструкции: краткий триггер попадает в системный контекст, полный текст подтягивается по требованию (get_fragment / fetch_full_text). Не часть дерева памяти.</p>
@@ -362,6 +415,7 @@
             <option value="">все</option>
             <option value="llm_request">llm_request</option>
             <option value="tool_call">tool_call</option>
+            <option value="laya">laya</option>
           </select>
         </label>
         <label>Назначение
@@ -446,6 +500,13 @@
               </div>
               <div class="model-table-body" id="modelTableBody"></div>
             </div>
+          </div>
+          <div class="field field-wide">
+            <label>Модель для планирования пула <span class="opt-tag">опционально</span></label>
+            <div class="model-row">
+              <input type="text" id="llmPlannerModelManual" placeholder="пусто = как основная модель" />
+            </div>
+            <div class="field-hint">Вызовы планирования и анализа инструментов (дешёвая быстрая модель с tool calling). Финальный ответ остаётся на основной модели.</div>
           </div>
           <div class="field field-wide">
             <label>Модель для суммаризации <span class="opt-tag">опционально</span></label>
@@ -623,6 +684,17 @@
               <option value="medium" selected>medium</option>
               <option value="high">high — медленнее, подробнее</option>
             </select>
+          </div>
+        </div>
+        <div class="section-title sub">Проверка ответа (Jev)</div>
+        <div class="llm-settings-grid">
+          <div class="field">
+            <label class="reasoning-toggle" style="font-size:13px;">
+              <input type="checkbox" id="jevVerifyToggle" />
+              Использовать Jev для проверки ответа
+            </label>
+            <div class="field-hint">Jev решает «прошло / не прошло» по существу и языку. Если уверен, LLM-проверка пропускается. Если не уверен, проверяет LLM. Текст сообщений уходит в OpenRouter.</div>
+            <div class="field-hint" id="jevVerifyStatus"></div>
           </div>
         </div>
         <div class="llm-settings-actions">

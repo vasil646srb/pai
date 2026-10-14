@@ -40,6 +40,8 @@ class LLMConfig:
     # Shares base_url/api_key/site_* and all generation params below with
     # the main assistant model — only the model id differs.
     summarizer_model: str = ""
+    # Model for PLANNING and ANALYSIS phases of the tool loop (tool pool choice). Empty = main model.
+    planner_model: str = ""
     # Model that checks the main model's final answer (answer check). Empty
     # string = fall back to the summarizer model. Same base_url/api_key.
     verify_model: str = ""
@@ -80,6 +82,9 @@ class LLMConfig:
 
     def is_configured(self) -> bool:
         return bool(self.base_url and self.model)
+
+    def effective_planner_model(self) -> str:
+        return self.planner_model or self.model
 
     def effective_summarizer_model(self) -> str:
         return self.summarizer_model or self.model
@@ -187,6 +192,7 @@ class LLMConfigStore:
             api_key=raw.get("api_key", "") or "",
             model=raw.get("model", "") or "",
             summarizer_model=raw.get("summarizer_model", "") or "",
+            planner_model=raw.get("planner_model", "") or "",
             verify_model=raw.get("verify_model", "") or "",
             vision_model=raw.get("vision_model", "") or "",
             verify_strictness=_clamp_strictness(raw.get("verify_strictness", 3)),

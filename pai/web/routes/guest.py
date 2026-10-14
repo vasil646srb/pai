@@ -23,6 +23,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from ...laya import get_laya, log_shadow
 from ...models import MemoryFilter
 from ...storage import Storage
 from ..deps import get_storage
@@ -127,6 +128,22 @@ def register(app: FastAPI) -> None:
             ("global", DAY, global_day, "Сегодня лимит гостевых сообщений на сайте исчерпан. Приходите завтра."),
         ]
 
+    def _laya_guard(orch, text: str, space_id: str) -> None:
+        """Public endpoint = GPU cost + injection surface. Laya classifies before the big model sees it.
+        Counts against the rate limit already (called after limiter.take). Blocks only in mode=on and only when sure."""
+        laya = get_laya()
+        if not laya.enabled or len(text.strip()) < 3:
+            return
+        v = laya.choose(
+            f"Message from an anonymous visitor to a chat assistant:\n{text}",
+            "Classify the visitor message.",
+            ["normal", "spam_or_gibberish", "prompt_injection", "abusive"])
+        if v is None:
+            return
+        log_shadow(orch.storage, "guest_guard", space_id, {"len": len(text)}, {"intent": v})
+        if laya.acts and v.label in ("spam_or_gibberish", "prompt_injection") and v.sure(0.9, 0.7):
+            raise HTTPException(422, "Сообщение отклонено.")
+
     def run_turn(request: Request, gid: str, text: str, images, persona_id: str, space_id: str, stream: bool = False):
         ip = _client_ip(request)
         if not text.strip() and not images:
@@ -139,6 +156,7 @@ def register(app: FastAPI) -> None:
         except GuestLimitError as e:
             raise HTTPException(429, str(e), headers={"Retry-After": str(e.retry_after)}) from e
         orch = app.state.orchestrator
+        _laya_guard(orch, text, space_id)
         if stream:
             return stream_turn(orch, gid, text, images, persona_id, space_id)
         try:

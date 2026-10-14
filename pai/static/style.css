@@ -1360,6 +1360,7 @@ img, svg, video, canvas { max-width: 100%; height: auto; }
 .al-frag { font-size:11px; padding:3px 0; border-bottom:1px dashed var(--border-soft); }
 .al-note { font-size:11px; color:var(--text-dim); margin:4px 0; }
 .badge-status.comp { background:rgba(180,120,255,.18); color:#b98cff; }
+.badge-status.laya { background:rgba(127,209,160,.16); color:#7fd1a0; }
 .al-pre { max-height:240px; overflow:auto; font-size:11px; white-space:pre-wrap; word-break:break-word; }
 @media (max-width:640px){ .al-chip{min-width:calc(50% - 8px);flex:1;} .al-parts .hide-m{display:none;} }
 

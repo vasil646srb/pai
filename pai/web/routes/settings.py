@@ -11,12 +11,79 @@ from ...llm_config import LLMConfig
 from ..builders import (
     build_llm_client,
     build_summarizer_llm_client,
+    build_planner_llm_client,
     build_verifier_llm_client,
     build_vision_llm_client,
 )
 
 
 def register(app: FastAPI) -> None:
+    _orch0 = getattr(app.state, "orchestrator", None)
+    if _orch0 is not None:  # planner model is applied from the saved config at startup too
+        _orch0.planner_llm = build_planner_llm_client(app.state.llm_config_store.load())
+    from ...telegram import TelegramError, get_services, init_services
+
+    init_services(app.state.secret_store, app.state.llm_config_store.path.parent)
+
+    from ...telegram import send_manual, set_classifier, set_responder
+    from ...telegram_agent import classify, make_responder
+
+    set_classifier(classify)  # Jev: does a group message need an answer?
+    set_responder(make_responder(app.state.orchestrator))  # persona brain writes the answer
+
+    def _tg(fn):
+        try:
+            return fn()
+        except TelegramError as e:
+            raise HTTPException(400, str(e)) from e
+
+    @app.get("/telegram/settings")
+    def tg_settings_get():
+        return get_services().public_view()
+
+    @app.put("/telegram/settings")
+    def tg_settings_put(body: dict):
+        def run():
+            s = get_services()
+            if body.get("token"):
+                s.set_token(str(body["token"]))
+            if isinstance(body.get("channels"), list):
+                s.save_channels(body["channels"])
+            if "group_auto_reply" in body:
+                s.set_auto_reply(bool(body["group_auto_reply"]))
+            return s.public_view()
+        return _tg(run)
+
+    @app.post("/telegram/check")
+    def tg_check():
+        return _tg(lambda: get_services().check())
+
+    @app.get("/telegram/queue")
+    def tg_queue():
+        return get_services().queue_view()
+
+    @app.post("/telegram/queue/{item_id}/{action}")
+    def tg_queue_act(item_id: str, action: str):
+        if action not in ("approve", "reject"):
+            raise HTTPException(404, "неизвестное действие")
+        return _tg(lambda: get_services()._act(item_id, approve=(action == "approve")))
+
+    @app.post("/telegram/send")
+    def tg_send(body: dict):
+        return _tg(lambda: send_manual(str(body.get("channel", "")), str(body.get("text", ""))))
+
+    @app.post("/telegram/process")
+    def tg_process():
+        return _tg(lambda: get_services().process_group())
+
+    @app.get("/telegram/inbox")
+    def tg_inbox():
+        return get_services().inbox_view()
+
+    @app.post("/telegram/poll")
+    def tg_poll():
+        return _tg(lambda: get_services().poll())
+
     @app.get("/settings/llm")
     def get_llm_settings():
         config = app.state.llm_config_store.load()
@@ -38,6 +105,7 @@ def register(app: FastAPI) -> None:
             api_key=(payload.api_key if payload.api_key else current.api_key),
             model=(payload.model if payload.model is not None else current.model).strip(),
             summarizer_model=(payload.summarizer_model if payload.summarizer_model is not None else current.summarizer_model).strip(),
+            planner_model=(payload.planner_model if payload.planner_model is not None else current.planner_model).strip(),
             verify_model=(payload.verify_model if payload.verify_model is not None else current.verify_model).strip(),
             vision_model=(payload.vision_model if payload.vision_model is not None else current.vision_model).strip(),
             verify_strictness=(payload.verify_strictness if payload.verify_strictness is not None else current.verify_strictness),
@@ -65,6 +133,7 @@ def register(app: FastAPI) -> None:
         new_llm = build_llm_client(new_config)
         new_summarizer_llm = build_summarizer_llm_client(new_config)
         new_verifier_llm = build_verifier_llm_client(new_config)
+        new_planner_llm = build_planner_llm_client(new_config)
         new_vision_llm = build_vision_llm_client(new_config)
         app.state.llm = new_llm
         app.state.summarizer_llm = new_summarizer_llm
@@ -84,10 +153,12 @@ def register(app: FastAPI) -> None:
             vision_llm=new_vision_llm,
             target_free_ratio=new_config.target_free_ratio(),
         )
+        app.state.orchestrator.planner_llm = new_planner_llm
         return {
             **new_config.masked(),
             "effective_summarizer_model": new_config.effective_summarizer_model(),
             "effective_verify_model": new_config.effective_verify_model(),
+            "effective_planner_model": new_config.effective_planner_model(),
             "effective_vision_model": new_config.effective_vision_model(),
             "active": isinstance(new_llm, OpenAICompatibleClient),
             "using_mock": isinstance(new_llm, MockLLM),

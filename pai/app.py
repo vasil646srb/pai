@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -10,6 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .custom_functions import CustomFunctionRegistry
 from .llm import LLMClient
+from .laya import get_laya
+from .laya_runtime import LayaRuntime
 from .llm_config import LLMConfigStore
 from .orchestrator import Orchestrator
 from .personas import PersonaRegistry, RulesManager, default_personas
@@ -111,6 +113,22 @@ def create_app(
     app.state.settings = settings
     app.state.services = ServiceStore(Path(data_dir) / "services.json")
     register_routes(app)
+
+    # Laya: find / install / start the local API server in the background (only when the server really runs;
+    # TestClient without a context manager and plain imports never fire startup events).
+    app.state.laya_runtime = LayaRuntime.from_env(get_laya(), data_dir)
+    _inner_lifespan = app.router.lifespan_context  # keeps any existing startup/shutdown handlers working
+
+    @asynccontextmanager
+    async def _lifespan(a):
+        a.state.laya_runtime.start()  # returns at once: install/start run in a background thread
+        try:
+            async with _inner_lifespan(a) as state:
+                yield state
+        finally:
+            a.state.laya_runtime.stop()
+
+    app.router.lifespan_context = _lifespan
     return app
 
 

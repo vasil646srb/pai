@@ -27,6 +27,38 @@ def register(app: FastAPI) -> None:
         return {"status": "ok"}
 
 
+    # Jev verify switch (settings page). Persisted in <data_dir>/laya_settings.json, applied to the live client at once.
+    from ...laya import get_laya, laya_settings_path, load_laya_settings, save_laya_settings
+
+    _laya_settings_file = laya_settings_path(app.state.llm_config_store.path.parent)
+    get_laya().use_for_verify = bool(load_laya_settings(_laya_settings_file).get("use_jev_verify", False))
+
+    @app.get("/laya/settings")
+    def laya_settings_get():
+        lay = get_laya()
+        has_key = bool(lay._key()) if getattr(lay, "remote", False) else True
+        reason = ""
+        if not lay.enabled:
+            reason = "выключено (PAI_LAYA_MODE=off)"
+        elif not has_key:
+            reason = "нет API-ключа: сохраните OpenRouter-ключ в настройках LLM"
+        elif not lay.ready:
+            reason = "Laya ещё не готова"
+        return {"use_jev_verify": lay.use_for_verify, "available": not reason, "reason": reason,
+                "provider": "jev" if getattr(lay, "remote", False) else "laya"}
+
+    @app.put("/laya/settings")
+    def laya_settings_put(body: dict):
+        val = bool(body.get("use_jev_verify", False))
+        get_laya().use_for_verify = val
+        save_laya_settings(_laya_settings_file, {"use_jev_verify": val})
+        return laya_settings_get()
+
+    @app.get("/laya/status")
+    def laya_status():
+        rt = getattr(app.state, "laya_runtime", None)
+        return rt.status() if rt else {"mode": "off", "state": "off", "ready": False}
+
     @app.get("/usage/balance")
     def usage_balance(refresh: bool = False):
         """OpenRouter balance for the configured key. The key itself is never returned."""

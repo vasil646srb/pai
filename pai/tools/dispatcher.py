@@ -70,6 +70,20 @@ class ToolDispatcher(PersonaToolsMixin, ProposalToolsMixin, MemoryToolsMixin, We
             custom = [s for s in self.custom_functions.schemas() if s["function"]["name"] in allowed]
         return builtins + custom
 
+    def _tool_telegram_post(self, arguments, persona):
+        from ..telegram import TelegramError, post_from_tool
+        try:
+            return post_from_tool(str(arguments.get("channel", "")), str(arguments.get("text", "")))
+        except TelegramError as e:
+            return {"tool_failed": True, "error": str(e), "tool": "telegram_post"}
+
+    def _tool_telegram_read(self, arguments, persona):
+        from ..telegram import TelegramError, read_from_tool
+        try:
+            return read_from_tool(str(arguments.get("channel", "all") or "all"))
+        except TelegramError as e:
+            return {"tool_failed": True, "error": str(e), "tool": "telegram_read"}
+
     def dispatch(self, name, arguments, persona=None):
         if persona is not None and not _can_self_modify(persona) and name in ("propose_function", "propose_rule"):
             raise ToolError("Эта персона не меняет правила и функции")

@@ -39,6 +39,13 @@ def build_summarizer_llm_client(config: LLMConfig) -> LLMClient:
     return build_llm_client(config, model=config.effective_summarizer_model())
 
 
+def build_planner_llm_client(config: LLMConfig) -> LLMClient | None:
+    """None when no separate planner model is set: the orchestrator then uses the main model."""
+    if not config.planner_model.strip() or config.planner_model.strip() == config.model.strip():
+        return None
+    return build_llm_client(config, model=config.planner_model.strip())
+
+
 def build_verifier_llm_client(config: LLMConfig) -> LLMClient:
     return build_llm_client(config, model=config.effective_verify_model())
 

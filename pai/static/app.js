@@ -899,6 +899,163 @@ document.getElementById("chatInput").addEventListener("paste", async (e) => {
   renderAttachmentPreviews();
 });
 
+/* ===================== Jev answer-check switch (settings) ===================== */
+async function jevToggleLoad() {
+  const box = document.getElementById("jevVerifyToggle");
+  const st = document.getElementById("jevVerifyStatus");
+  try {
+    const d = await api("/laya/settings");
+    box.checked = !!d.use_jev_verify;
+    box.disabled = !d.available && !d.use_jev_verify;
+    st.textContent = d.available ? "" : (d.reason || "недоступно");
+  } catch (e) {
+    st.textContent = "ошибка: " + e.message;
+  }
+}
+async function jevToggleSave(ev) {
+  const box = ev.target;
+  const st = document.getElementById("jevVerifyStatus");
+  try {
+    const d = await api("/laya/settings", { method: "PUT", body: { use_jev_verify: box.checked } });
+    box.checked = !!d.use_jev_verify;
+    st.textContent = box.checked ? "Jev включён для проверки" : "проверка только LLM";
+  } catch (e) {
+    box.checked = !box.checked;
+    st.textContent = "не сохранено: " + e.message;
+  }
+}
+function jevToggleInit() {
+  const box = document.getElementById("jevVerifyToggle");
+  if (!box || box.dataset.bound) return;
+  box.dataset.bound = "1";
+  box.addEventListener("change", jevToggleSave);
+  jevToggleLoad();
+}
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", jevToggleInit);
+else jevToggleInit();
+
+/* ===================== Telegram page ===================== */
+function tgChannel(d, key) { return (d.channels || []).find((c) => c.key === key) || { chat_id: "", mode: "" }; }
+function tgFill(d) {
+  document.getElementById("tgTokenHint").textContent = d.token_set ? `сохранён: ${d.token_preview}` : "токен не задан";
+  const pub = tgChannel(d, "public"), prv = tgChannel(d, "private");
+  document.getElementById("tgPublicChat").value = pub.chat_id || "";
+  document.getElementById("tgPublicMode").value = pub.mode || "approve";
+  document.getElementById("tgPrivateChat").value = prv.chat_id || "";
+  document.getElementById("tgPrivateMode").value = prv.mode || "auto";
+  const grp = tgChannel(d, "group");
+  document.getElementById("tgGroupChat").value = grp.chat_id || "";
+  document.getElementById("tgGroupMode").value = grp.mode || "approve";
+  document.getElementById("tgAutoReply").checked = !!d.group_auto_reply;
+}
+async function tgLoad() {
+  try { tgFill(await api("/telegram/settings")); }
+  catch (e) { document.getElementById("tgStatus").textContent = "ошибка: " + e.message; }
+}
+async function tgSave() {
+  const st = document.getElementById("tgStatus");
+  const body = {
+    token: document.getElementById("tgToken").value.trim(),
+    group_auto_reply: document.getElementById("tgAutoReply").checked,
+    channels: [
+      { key: "public", chat_id: document.getElementById("tgPublicChat").value.trim(), mode: document.getElementById("tgPublicMode").value },
+      { key: "private", chat_id: document.getElementById("tgPrivateChat").value.trim(), mode: document.getElementById("tgPrivateMode").value },
+      { key: "group", chat_id: document.getElementById("tgGroupChat").value.trim(), mode: document.getElementById("tgGroupMode").value },
+    ],
+  };
+  try {
+    const d = await api("/telegram/settings", { method: "PUT", body });
+    document.getElementById("tgToken").value = "";
+    tgFill(d); st.textContent = "сохранено";
+  } catch (e) { st.textContent = "не сохранено: " + e.message; }
+}
+async function tgCheck() {
+  const out = document.getElementById("tgCheckOut");
+  out.textContent = "проверяю…";
+  try {
+    const d = await api("/telegram/check", { method: "POST" });
+    out.textContent = `бот @${d.bot}\n` + d.channels.map((c) => `${c.ok ? "✓" : "✗"} ${c.title}: ${c.detail}`).join("\n");
+  } catch (e) { out.textContent = "ошибка: " + e.message; }
+}
+function tgItemHtml(i, withButtons) {
+  const when = new Date((i.created || 0) * 1000).toLocaleString("ru-RU");
+  const btns = withButtons
+    ? `<div class="llm-settings-actions"><button class="btn primary sm" data-tg="approve" data-id="${esc(i.id)}">Опубликовать</button>`
+      + `<button class="btn ghost sm" data-tg="reject" data-id="${esc(i.id)}">Отклонить</button></div>`
+    : "";
+  const status = withButtons ? "" : ` · <span class="mono">${esc(i.status)}</span>` + (i.error ? ` · ${esc(i.error)}` : "");
+  return `<div class="card" style="margin:8px 0;"><div class="al-note">${when} · ${esc(i.channel)}${status}</div>`
+    + `<pre class="mono al-pre">${esc(i.text)}</pre>${btns}</div>`;
+}
+async function tgQueueLoad() {
+  const q = document.getElementById("tgQueue"), h = document.getElementById("tgHistory");
+  try {
+    const d = await api("/telegram/queue");
+    q.innerHTML = d.pending.length ? d.pending.map((i) => tgItemHtml(i, true)).join("") : `<div class="empty-state">нет ожидающих постов</div>`;
+    h.innerHTML = d.history.length ? d.history.map((i) => tgItemHtml(i, false)).join("") : `<div class="empty-state">пусто</div>`;
+  } catch (e) { q.innerHTML = `<div class="empty-state">ошибка: ${esc(e.message)}</div>`; }
+}
+async function tgQueueAct(ev) {
+  const b = ev.target.closest("button[data-tg]");
+  if (!b) return;
+  try { await api(`/telegram/queue/${encodeURIComponent(b.dataset.id)}/${b.dataset.tg}`, { method: "POST" }); }
+  catch (e) { alert("не выполнено: " + e.message); }
+  tgQueueLoad();
+}
+function tgInit() {
+  if (!document.getElementById("tgSave") || document.getElementById("tgSave").dataset.bound) return;
+  document.getElementById("tgSave").dataset.bound = "1";
+  document.getElementById("tgSave").addEventListener("click", tgSave);
+  document.getElementById("tgCheck").addEventListener("click", tgCheck);
+  document.getElementById("tgQueueRefresh").addEventListener("click", tgQueueLoad);
+  document.getElementById("tgQueue").addEventListener("click", tgQueueAct);
+  tgLoad(); tgQueueLoad(); tgInboxLoad();
+  document.getElementById("tgSend").addEventListener("click", tgSendManual);
+  document.getElementById("tgProcess").addEventListener("click", tgProcessNow);
+  document.getElementById("tgPoll").addEventListener("click", tgPollNow);
+}
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", tgInit);
+else tgInit();
+
+async function tgInboxLoad() {
+  const box = document.getElementById("tgInbox");
+  try {
+    const d = await api("/telegram/inbox");
+    box.innerHTML = d.recent.length
+      ? d.recent.map((m) => `<div class="card" style="margin:8px 0;"><div class="al-note">${new Date((m.date || 0) * 1000).toLocaleString("ru-RU")} · ${esc(m.channel)} · ${esc(m.from || "?")}${m.read ? "" : " · <b>новое</b>"}</div><pre class="mono al-pre">${esc(m.text)}</pre></div>`).join("")
+      : `<div class="empty-state">сообщений нет</div>`;
+  } catch (e) { box.innerHTML = `<div class="empty-state">ошибка: ${esc(e.message)}</div>`; }
+}
+async function tgPollNow() {
+  const st = document.getElementById("tgStatus");
+  try { const d = await api("/telegram/poll", { method: "POST" }); st.textContent = `новых сообщений: ${d.new}`; }
+  catch (e) { st.textContent = "не проверено: " + e.message; }
+  tgInboxLoad();
+}
+
+async function tgSendManual() {
+  const st = document.getElementById("tgSendStatus");
+  const channel = document.getElementById("tgSendChannel").value;
+  const text = document.getElementById("tgSendText").value.trim();
+  if (!text) { st.textContent = "текст пустой"; return; }
+  try {
+    const d = await api("/telegram/send", { method: "POST", body: { channel, text } });
+    st.textContent = d.status === "sent" ? "опубликовано"
+      : d.status === "pending" ? "в очереди на подтверждение"
+      : `ошибка: ${d.error || d.status}`;
+    if (d.status !== "failed") document.getElementById("tgSendText").value = "";
+    tgQueueLoad();
+  } catch (e) { st.textContent = "не отправлено: " + e.message; }
+}
+async function tgProcessNow() {
+  const st = document.getElementById("tgStatus");
+  try {
+    const d = await api("/telegram/process", { method: "POST" });
+    st.textContent = `обработано: ${d.processed} из ${d.checked || 0}${d.reason ? " (" + d.reason + ")" : ""}`;
+  } catch (e) { st.textContent = "не обработано: " + e.message; }
+  tgInboxLoad(); tgQueueLoad();
+}
+
 /* ===================== reasoning display ===================== */
 
 // ensureReasoningBlock() expects an element exposing .querySelector(".md" / ".bubble");
@@ -2085,6 +2242,7 @@ function alParse(v) {
 }
 
 function alLabel(row, req) {
+  if (row.kind === "laya") return alLayaLabel(row);
   if (row.kind !== "llm_request") return `вызов функции: <span class="mono">${esc(row.name || "")}</span>`;
   const purpose = req && req.purpose;
   const phase = req && req.phase;
@@ -2198,7 +2356,33 @@ function alCompression(req, resp) {
     <div class="al-note">ID узлов: <span class="mono">${esc((c.source_node_ids || []).join(", "))}</span></div>`;
 }
 
+function alLayaLabel(row) {
+  const lay = (alParse(row.response) || {}).laya || {};
+  const parts = Object.entries(lay).map(([q, v]) => `${esc(q)} = ${esc(v.label || "?")} (${Math.round((v.p || 0) * 100)}%)`);
+  return `laya · <span class="mono">${esc(row.name || "")}</span>${parts.length ? " · " + parts.join(", ") : ""}`;
+}
+
+function alLayaBody(row) {
+  const req = alParse(row.request) || {};
+  const resp = alParse(row.response) || {};
+  const lay = resp.laya || {};
+  let html = `<div class="al-sec">Запрос</div><pre class="mono al-pre">${esc(JSON.stringify(req, null, 2))}</pre>`;
+  html += `<div class="al-sec">Ответ Laya</div>`;
+  for (const q of Object.keys(lay)) {
+    const v = lay[q] || {};
+    const probs = Object.entries(v.probs || {}).sort((a, b) => b[1] - a[1])
+      .map(([k, p]) => `${esc(k)}: ${(p * 100).toFixed(1)}%`).join(" · ");
+    html += `<div class="al-note">${esc(q)} → <b>${esc(v.label || "—")}</b> · отступ ${esc(String(v.margin ?? "—"))} · confidence ${esc(String(v.confidence ?? "—"))}</div>`;
+    html += `<div class="mono al-note">${probs}</div>`;
+  }
+  if (row.latency_seconds != null) html += `<div class="al-note">задержка ${Number(row.latency_seconds).toFixed(3)} с</div>`;
+  if (resp.actual) html += `<div class="al-sec">Факт (старый путь)</div><pre class="mono al-pre">${esc(JSON.stringify(resp.actual, null, 2))}</pre>`;
+  if (row.error) html += `<div class="al-sec">ошибка</div><pre class="mono al-pre">${esc(row.error)}</pre>`;
+  return html;
+}
+
 function alBody(row) {
+  if (row.kind === "laya") return alLayaBody(row);
   const req = alParse(row.request) || {};
   const resp = alParse(row.response);
   if (row.kind !== "llm_request") {
@@ -2255,7 +2439,7 @@ async function loadActionLog() {
       const resp = alParse(row.response) || {};
       const time = new Date(row.ts * 1000).toLocaleString("ru-RU");
       const isComp = req.purpose === "compression";
-      const kindBadge = row.kind === "llm_request"
+      const kindBadge = row.kind === "laya" ? `<span class="badge-status laya">laya</span>` : row.kind === "llm_request"
         ? (isComp ? `<span class="badge-status comp">сжатие</span>` : `<span class="badge-status validated">llm_request</span>`)
         : `<span class="badge-status active">tool_call</span>`;
       const errBadge = row.error ? `<span class="badge-status rejected">ошибка</span>` : "";
@@ -2687,6 +2871,7 @@ async function loadLlmSettings() {
     document.getElementById("llmVerifyModelManual").placeholder = data.verify_model
       ? ""
       : `пусто = как для суммаризации (сейчас: ${data.effective_verify_model || "—"})`;
+    document.getElementById("llmPlannerModelManual").value = data.planner_model || "";
     summarizerModelPicker.state.selectedId = data.summarizer_model || "";
     document.getElementById("llmSummarizerModelManual").value = data.summarizer_model || "";
     document.getElementById("llmSummarizerModelManual").placeholder = data.summarizer_model
@@ -2833,6 +3018,7 @@ document.getElementById("btnSaveLlmSettings").addEventListener("click", async ()
       base_url: baseUrl,
       model: model,
       summarizer_model: document.getElementById("llmSummarizerModelManual").value.trim(),
+      planner_model: document.getElementById("llmPlannerModelManual").value.trim(),
       verify_model: document.getElementById("llmVerifyModelManual").value.trim(),
       vision_model: document.getElementById("llmVisionModelManual").value.trim(),
       verify_strictness: Number(document.getElementById("llmVerifyStrictness").value),

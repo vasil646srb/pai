@@ -174,6 +174,7 @@ class LLMSettingsUpdate(BaseModel):
     api_key: str | None = None
     model: str | None = None
     summarizer_model: str | None = None
+    planner_model: str | None = None
     verify_model: str | None = None
     vision_model: str | None = None
     verify_strictness: int | None = Field(default=None, ge=1, le=5)

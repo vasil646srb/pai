@@ -29,6 +29,7 @@ import time
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from ..laya import get_laya, log_shadow, laya_pool_shadow, last_user_text, laya_verify_pair
 from ..llm import LLMError
 from ..models import NodeType, Persona
 from ..prompts import load_prompt
@@ -60,11 +61,27 @@ _ANNOUNCED_ACTION_RE = re.compile(
 )
 
 
-def _announces_unfinished_action(text: str) -> bool:
-    """Heuristic: a short reply that says the model is about to act, but makes no tool call.
-    Used to give the model one chance to make the call it announced."""
+def _announces_unfinished_action(text: str, storage=None, space_id=None) -> bool:
+    """A short reply that says the model is about to act, but makes no tool call.
+    Used to give the model one chance to make the call it announced.
+    Regex covers RU/EN only; Laya (multilingual) overrides it when mode=on and sure, else logs in shadow."""
     t = text.strip()
-    return 0 < len(t) <= 500 and bool(_ANNOUNCED_ACTION_RE.search(t)) and t[-1:] in ".:…!"
+    if not (0 < len(t) <= 500 and t[-1:] in ".:…!"):
+        return False
+    rx = bool(_ANNOUNCED_ACTION_RE.search(t))
+    laya = get_laya()
+    if laya.enabled:
+        v = laya.choose(
+            f"Assistant message:\n{t}",
+            "Does this assistant message announce an action it is about to perform "
+            "(reading, checking, searching, running something) instead of giving a final answer?",
+            ["announces_action", "final_answer"])
+        if v is not None:
+            if storage is not None:
+                log_shadow(storage, "announce", space_id, {"len": len(t)}, {"announce": v}, {"regex": rx})
+            if laya.acts and v.sure(0.75, 0.4):
+                return v.label == "announces_action"
+    return rx
 
 
 
@@ -333,6 +350,33 @@ class DialogLoop:
                       + "\n\n".join(model_parts))
         return model_text, "\n\n".join(memo_parts)
 
+    _LAYA_VERIFY_Q = {
+        "answers": ("Does the assistant reply concretely answer or complete the user's message?",
+                    ["answers", "partial_or_off_topic", "only_promises_action"]),
+        "language": ("Is the assistant reply written in the same language as the user's message?",
+                     ["same_language", "different_language"]),
+    }
+
+    def _laya_verify_gate(self, space_id, user_text: str, answer: str, level: int):
+        """Cheap pre-check. shadow: log Laya's verdict next to the LLM verdict (see _verify_answer callers).
+        on: confident pass at strictness <= 3 skips the checker LLM entirely (suggested_replies are then empty)."""
+        laya = get_laya()
+        if not laya.enabled:
+            return None
+        r = laya.ask(f"User message:\n{user_text}\n\nAssistant reply:\n{answer}", self._LAYA_VERIFY_Q)
+        if not r or "answers" not in r:
+            return None
+        lang = r.get("language")
+        log_shadow(self.storage, "verify_gate", space_id, {"strictness": level}, r)
+        self._jev_last = r
+        if (laya.acts_verify and level <= 3 and r["answers"].label == "answers" and r["answers"].sure(0.85, 0.6)
+                and (lang is None or lang.label == "same_language")):
+            return {"status": "pass", "ok": True, "error": None, "strictness": level,
+                    "min_usefulness": _STRICTNESS_LEVELS[level][1], "report": "", "usefulness": None,
+                    "missing": "", "fix_plan": [], "suggested_replies": [], "user_language": None,
+                    "skipped_by": "laya"}
+        return None
+
     def _verify_answer(self, space_id: str, user_text: str, answer: str) -> dict:
         """Ask the checker model whether `answer` addresses the user's last message.
         Always returns a verdict with status "pass" | "fail" | "error". "error" means the check
@@ -347,6 +391,9 @@ class DialogLoop:
             for n in nodes
         ) or "(empty)"
         level = _strictness_level(getattr(self, "verify_strictness", 3))
+        gate = self._laya_verify_gate(space_id, user_text, answer, level)
+        if gate is not None:
+            return gate
         prompt = (f"Recent dialogue messages:\n{dialog}\n\n"
                   f"User's last message:\n{user_text}\n\n"
                   f"Assistant's new reply:\n{answer}\n\n"
@@ -434,6 +481,9 @@ class DialogLoop:
         msgs = messages
         for attempt in range(1, checks + 1):
             verdict = self._verify_answer(space_id, user_text, final_content)
+            laya_verify_pair(self.storage, space_id, getattr(self, "_jev_last", None), verdict,
+                             _strictness_level(getattr(self, "verify_strictness", 3)))
+            self._jev_last = None
             state.verdicts.append({**verdict, "attempt": attempt, "checks_allowed": checks})
             if verdict["status"] != "fail" or attempt == checks:
                 break  # pass, check error, or last allowed check: the answer stays as it is
@@ -495,7 +545,7 @@ class DialogLoop:
             if pool is None:
                 # The model said it would act but made no call: give it one chance.
                 if (content and not nudged and iteration + 1 < self.max_tool_iterations
-                        and _announces_unfinished_action(content)):
+                        and _announces_unfinished_action(content, self.storage, space_id)):
                     nudged = True
                     if result["streamed_content"]:
                         yield {"type": "delta_reset"}
@@ -515,6 +565,8 @@ class DialogLoop:
                 return tool_trace, (text if streamed or text != _ITERATION_LIMIT_FALLBACK else _EMPTY_HINT), streamed
 
             pool = self._normalize_pool(pool, tool_schemas)
+            if iteration == 0:  # shadow: Jev votes per tool, background thread, planner unaffected
+                laya_pool_shadow(self.storage, space_id, last_user_text(messages), tool_schemas, pool)
             fresh = []
             for tc in pool:
                 key = json.dumps({"name": tc["name"], "arguments": tc["arguments"]},

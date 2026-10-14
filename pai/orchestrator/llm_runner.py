@@ -193,7 +193,8 @@ class LLMRunner:
         finish_reason}."""
         if system_segments is None:
             system_segments = getattr(getattr(self.orch, "_turn_local", None), "system_segments", None)
-        llm = self.llm
+        # Planning/analysis go to the planner model when one is set; the final answer stays on the main model.
+        llm = (getattr(self.orch, "planner_llm", None) if phase in ("planning", "analysis") else None) or self.llm
         request_log = dict(llm.request_params())
         if temperature is not None:
             request_log["temperature"] = temperature
