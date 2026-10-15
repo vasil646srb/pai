@@ -33,6 +33,7 @@
   }
 
   function fillForm(s) {
+    $("svcFold").open = true;
     $("svcEditId").value = s.id;
     $("serviceFormTitle").textContent = "Редактирование: " + s.name;
     $("svcName").value = s.name;
@@ -92,14 +93,14 @@
       : `<div class="svc-run err"><div class="svc-run-head">${fmt(r.finished_at)} · ошибка</div><div class="svc-run-text">${esc(r.error)}</div></div>`
     ).join("");
     return `
-      <div class="persona-card" data-id="${esc(s.id)}">
-        <div class="persona-card-top">
+      <details class="fold-item persona-card" data-id="${esc(s.id)}">
+        <summary><div class="persona-card-top">
           <div>
             <div class="persona-name">${esc(s.name)}</div>
             <div class="persona-id">${esc(s.persona_id)} · каждые ${s.interval_minutes} мин · пространство ${esc(s.space_id)}</div>
           </div>
           ${status}
-        </div>
+        </div></summary>
         <div class="svc-prompt">${esc(s.prompt)}</div>
         <div class="meta-line">последний запуск: ${fmt(s.last_run_at)} · следующий: ${s.enabled ? fmt(s.next_run_at) : "—"}</div>
         <div class="card-actions">
@@ -111,7 +112,7 @@
         ${runs
           ? `<details class="svc-runs"><summary>История (${s.runs.length})</summary>${runs}</details>`
           : '<div class="meta-line">Запусков пока не было.</div>'}
-      </div>`;
+      </details>`;
   }
 
   async function refresh() {

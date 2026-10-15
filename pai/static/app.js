@@ -149,6 +149,25 @@ function levelColor(level) {
 
 const LS_KEY_VIEW = "pai.activeView";
 
+/* Space pickers (overview compress, archive search, memory explorer tree) are filled from the server. */
+async function loadSpaceSelects() {
+  let spaces;
+  try { spaces = await api("/memory/spaces"); } catch (_) { return; }
+  const pickers = [
+    ["compressSpace", "все пространства", "all"],
+    ["searchSpace", "все пространства", "all"],
+    ["treeSpace", null, null],
+  ];
+  pickers.forEach(([id, allLabel]) => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const prev = sel.value;
+    const head = allLabel === null ? "" : `<option value="${id === "searchSpace" ? "" : "all"}">${esc(allLabel)}</option>`;
+    sel.innerHTML = head + spaces.map((sp) => `<option value="${esc(sp)}">${esc(sp)}</option>`).join("");
+    if (prev && (spaces.includes(prev) || prev === "all")) sel.value = prev;
+  });
+}
+
 function switchView(name, { persist = true } = {}) {
   document.querySelectorAll(".nav-item").forEach((el) => {
     el.classList.toggle("active", el.dataset.view === name);
@@ -158,6 +177,7 @@ function switchView(name, { persist = true } = {}) {
   });
   if (persist) localStorage.setItem(LS_KEY_VIEW, name);
   if (name === "overview") loadOverview();
+  loadSpaceSelects();
   if (name === "tree") loadTreeRoots();
   if (name === "personas") { loadPersonas(); populateCreatePersonaSelects(); }
   if (name === "rules") loadRules();
@@ -935,22 +955,55 @@ if (document.readyState === "loading") document.addEventListener("DOMContentLoad
 else jevToggleInit();
 
 /* ===================== Telegram page ===================== */
+const TG_CHAN = { public: "публичный", private: "приватный", group: "группа", owner: "владелец" };
+let tgOptions = { tools: [], spaces: [] };
 function tgChannel(d, key) { return (d.channels || []).find((c) => c.key === key) || { chat_id: "", mode: "" }; }
+function tgChecks(name, values, checked) {
+  return values.map((v) => `<label class="tg-check"><input type="checkbox" name="${name}" value="${esc(v)}"${checked.includes(v) ? " checked" : ""}> ${esc(v)}</label>`).join("");
+}
 function tgFill(d) {
   document.getElementById("tgTokenHint").textContent = d.token_set ? `сохранён: ${d.token_preview}` : "токен не задан";
-  const pub = tgChannel(d, "public"), prv = tgChannel(d, "private");
+  const pub = tgChannel(d, "public"), prv = tgChannel(d, "private"), grp = tgChannel(d, "group");
   document.getElementById("tgPublicChat").value = pub.chat_id || "";
   document.getElementById("tgPublicMode").value = pub.mode || "approve";
   document.getElementById("tgPrivateChat").value = prv.chat_id || "";
   document.getElementById("tgPrivateMode").value = prv.mode || "auto";
-  const grp = tgChannel(d, "group");
   document.getElementById("tgGroupChat").value = grp.chat_id || "";
   document.getElementById("tgGroupMode").value = grp.mode || "approve";
   document.getElementById("tgAutoReply").checked = !!d.group_auto_reply;
+  const p = d.policy || {};
+  document.getElementById("tgOwnerId").value = p.owner_id || "";
+  document.getElementById("tgOwnerCommands").checked = !!p.owner_commands;
+  document.getElementById("tgOwnerSpace").value = p.owner_space || "personal";
+  const conf = Number(p.jev_min_confidence ?? 0.6);
+  document.getElementById("tgJevConf").value = conf;
+  document.getElementById("tgJevConfVal").textContent = conf.toFixed(2);
+  document.querySelectorAll('input[name="tgKind"]').forEach((cb) => { cb.checked = (p.jev_reply_kinds || []).includes(cb.value); });
+  tgRenderOptions(p);
+}
+function tgRenderOptions(p) {
+  document.getElementById("tgGroupTools").innerHTML = tgChecks("tgTool", tgOptions.tools || [], p.group_tools || []);
+  const spaces = [...new Set([...(tgOptions.spaces || []), ...(p.group_spaces || []), "personal"])].filter((s) => s !== "telegram-group");
+  document.getElementById("tgGroupSpaces").innerHTML = tgChecks("tgSpace", spaces, p.group_spaces || []);
+  document.getElementById("tgSpaces").innerHTML = (tgOptions.spaces || []).map((s) => `<option value="${esc(s)}">`).join("");
+}
+function tgPolicyBody() {
+  const checked = (n) => [...document.querySelectorAll(`input[name="${n}"]:checked`)].map((c) => c.value);
+  return {
+    owner_id: document.getElementById("tgOwnerId").value.trim(),
+    owner_commands: document.getElementById("tgOwnerCommands").checked,
+    owner_space: document.getElementById("tgOwnerSpace").value.trim() || "personal",
+    group_tools: checked("tgTool"),
+    group_spaces: checked("tgSpace"),
+    jev_min_confidence: parseFloat(document.getElementById("tgJevConf").value),
+    jev_reply_kinds: checked("tgKind"),
+  };
 }
 async function tgLoad() {
-  try { tgFill(await api("/telegram/settings")); }
-  catch (e) { document.getElementById("tgStatus").textContent = "ошибка: " + e.message; }
+  try {
+    tgOptions = await api("/telegram/options");
+    tgFill(await api("/telegram/settings"));
+  } catch (e) { document.getElementById("tgStatus").textContent = "ошибка: " + e.message; }
 }
 async function tgSave() {
   const st = document.getElementById("tgStatus");
@@ -962,6 +1015,7 @@ async function tgSave() {
       { key: "private", chat_id: document.getElementById("tgPrivateChat").value.trim(), mode: document.getElementById("tgPrivateMode").value },
       { key: "group", chat_id: document.getElementById("tgGroupChat").value.trim(), mode: document.getElementById("tgGroupMode").value },
     ],
+    policy: tgPolicyBody(),
   };
   try {
     const d = await api("/telegram/settings", { method: "PUT", body });
@@ -977,15 +1031,26 @@ async function tgCheck() {
     out.textContent = `бот @${d.bot}\n` + d.channels.map((c) => `${c.ok ? "✓" : "✗"} ${c.title}: ${c.detail}`).join("\n");
   } catch (e) { out.textContent = "ошибка: " + e.message; }
 }
+function tgFold(text, preview) {
+  const p = (preview || "").replace(/\s+/g, " ").slice(0, 90);
+  return `<summary><span class="al-note">${esc(text)}</span> <span class="fold-preview">${esc(p)}${p.length >= 90 ? "…" : ""}</span></summary>`;
+}
 function tgItemHtml(i, withButtons) {
   const when = new Date((i.created || 0) * 1000).toLocaleString("ru-RU");
   const btns = withButtons
     ? `<div class="llm-settings-actions"><button class="btn primary sm" data-tg="approve" data-id="${esc(i.id)}">Опубликовать</button>`
       + `<button class="btn ghost sm" data-tg="reject" data-id="${esc(i.id)}">Отклонить</button></div>`
     : "";
-  const status = withButtons ? "" : ` · <span class="mono">${esc(i.status)}</span>` + (i.error ? ` · ${esc(i.error)}` : "");
-  return `<div class="card" style="margin:8px 0;"><div class="al-note">${when} · ${esc(i.channel)}${status}</div>`
-    + `<pre class="mono al-pre">${esc(i.text)}</pre>${btns}</div>`;
+  const status = withButtons ? "" : `<span class="mono">${esc(i.status)}</span>` + (i.error ? ` · ${esc(i.error)}` : "");
+  return `<details class="fold-item">${tgFold(`${when} · ${TG_CHAN[i.channel] || i.channel}`, i.text)}`
+    + `<div class="al-note">${status}</div><pre class="mono al-pre">${esc(i.text)}</pre>${btns}</details>`;
+}
+function tgInboxHtml(m) {
+  const when = new Date((m.date || 0) * 1000).toLocaleString("ru-RU");
+  const who = m.from || "?";
+  const flags = (m.read ? "" : " · <b>новое</b>") + (m.reply_status ? ` · ответ: ${esc(m.reply_status)}` : "");
+  return `<details class="fold-item">${tgFold(`${when} · ${TG_CHAN[m.channel] || m.channel} · ${who}`, m.text)}`
+    + `<div class="al-note">${flags}${m.error ? " · " + esc(m.error) : ""}</div><pre class="mono al-pre">${esc(m.text)}</pre></details>`;
 }
 async function tgQueueLoad() {
   const q = document.getElementById("tgQueue"), h = document.getElementById("tgHistory");
@@ -998,32 +1063,16 @@ async function tgQueueLoad() {
 async function tgQueueAct(ev) {
   const b = ev.target.closest("button[data-tg]");
   if (!b) return;
+  ev.preventDefault();
   try { await api(`/telegram/queue/${encodeURIComponent(b.dataset.id)}/${b.dataset.tg}`, { method: "POST" }); }
   catch (e) { alert("не выполнено: " + e.message); }
   tgQueueLoad();
 }
-function tgInit() {
-  if (!document.getElementById("tgSave") || document.getElementById("tgSave").dataset.bound) return;
-  document.getElementById("tgSave").dataset.bound = "1";
-  document.getElementById("tgSave").addEventListener("click", tgSave);
-  document.getElementById("tgCheck").addEventListener("click", tgCheck);
-  document.getElementById("tgQueueRefresh").addEventListener("click", tgQueueLoad);
-  document.getElementById("tgQueue").addEventListener("click", tgQueueAct);
-  tgLoad(); tgQueueLoad(); tgInboxLoad();
-  document.getElementById("tgSend").addEventListener("click", tgSendManual);
-  document.getElementById("tgProcess").addEventListener("click", tgProcessNow);
-  document.getElementById("tgPoll").addEventListener("click", tgPollNow);
-}
-if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", tgInit);
-else tgInit();
-
 async function tgInboxLoad() {
   const box = document.getElementById("tgInbox");
   try {
     const d = await api("/telegram/inbox");
-    box.innerHTML = d.recent.length
-      ? d.recent.map((m) => `<div class="card" style="margin:8px 0;"><div class="al-note">${new Date((m.date || 0) * 1000).toLocaleString("ru-RU")} · ${esc(m.channel)} · ${esc(m.from || "?")}${m.read ? "" : " · <b>новое</b>"}</div><pre class="mono al-pre">${esc(m.text)}</pre></div>`).join("")
-      : `<div class="empty-state">сообщений нет</div>`;
+    box.innerHTML = d.recent.length ? d.recent.map(tgInboxHtml).join("") : `<div class="empty-state">сообщений нет</div>`;
   } catch (e) { box.innerHTML = `<div class="empty-state">ошибка: ${esc(e.message)}</div>`; }
 }
 async function tgPollNow() {
@@ -1032,29 +1081,39 @@ async function tgPollNow() {
   catch (e) { st.textContent = "не проверено: " + e.message; }
   tgInboxLoad();
 }
-
-async function tgSendManual() {
-  const st = document.getElementById("tgSendStatus");
-  const channel = document.getElementById("tgSendChannel").value;
-  const text = document.getElementById("tgSendText").value.trim();
-  if (!text) { st.textContent = "текст пустой"; return; }
-  try {
-    const d = await api("/telegram/send", { method: "POST", body: { channel, text } });
-    st.textContent = d.status === "sent" ? "опубликовано"
-      : d.status === "pending" ? "в очереди на подтверждение"
-      : `ошибка: ${d.error || d.status}`;
-    if (d.status !== "failed") document.getElementById("tgSendText").value = "";
-    tgQueueLoad();
-  } catch (e) { st.textContent = "не отправлено: " + e.message; }
-}
 async function tgProcessNow() {
   const st = document.getElementById("tgStatus");
   try {
     const d = await api("/telegram/process", { method: "POST" });
-    st.textContent = `обработано: ${d.processed} из ${d.checked || 0}${d.reason ? " (" + d.reason + ")" : ""}`;
+    st.textContent = `группа: обработано ${d.processed} из ${d.checked || 0}${d.reason ? " (" + d.reason + ")" : ""}`;
   } catch (e) { st.textContent = "не обработано: " + e.message; }
   tgInboxLoad(); tgQueueLoad();
 }
+async function tgProcessOwner() {
+  const st = document.getElementById("tgStatus");
+  try {
+    const d = await api("/telegram/process_owner", { method: "POST" });
+    st.textContent = `команды владельца: выполнено ${d.processed}${d.reason ? " (" + d.reason + ")" : ""}`;
+  } catch (e) { st.textContent = "не выполнено: " + e.message; }
+  tgInboxLoad();
+}
+function tgInit() {
+  if (!document.getElementById("tgSave") || document.getElementById("tgSave").dataset.bound) return;
+  document.getElementById("tgSave").dataset.bound = "1";
+  document.getElementById("tgSave").addEventListener("click", tgSave);
+  document.getElementById("tgCheck").addEventListener("click", tgCheck);
+  document.getElementById("tgQueueRefresh").addEventListener("click", tgQueueLoad);
+  document.getElementById("tgQueue").addEventListener("click", tgQueueAct);
+  document.getElementById("tgPoll").addEventListener("click", tgPollNow);
+  document.getElementById("tgProcess").addEventListener("click", tgProcessNow);
+  document.getElementById("tgProcessOwner").addEventListener("click", tgProcessOwner);
+  document.getElementById("tgJevConf").addEventListener("input", (e) => {
+    document.getElementById("tgJevConfVal").textContent = Number(e.target.value).toFixed(2);
+  });
+  tgLoad(); tgQueueLoad(); tgInboxLoad();
+}
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", tgInit);
+else tgInit();
 
 /* ===================== reasoning display ===================== */
 
@@ -1745,11 +1804,11 @@ async function loadPersonas() {
     const personas = await api("/personas");
     if (!personas.length) { box.innerHTML = `<div class="empty-state">Персон нет</div>`; return; }
     box.innerHTML = personas.map((p) => `
-      <div class="persona-card" data-id="${esc(p.persona_id)}">
-        <div class="persona-card-top">
+      <details class="fold-item persona-card" data-id="${esc(p.persona_id)}">
+        <summary><div class="persona-card-top">
           <div><span class="persona-name">${esc(p.name)}</span><span class="persona-id">${esc(p.persona_id)}</span></div>
           <span class="tag">${esc(p.tone)}</span>
-        </div>
+        </div></summary>
         <div class="persona-desc">${esc(p.description || "—")}</div>
         <div class="persona-meta">
           <span class="tag">spaces: ${(p.allow_spaces || []).length ? esc(p.allow_spaces.join(", ")) : "все"}</span>
@@ -1762,7 +1821,7 @@ async function loadPersonas() {
           <button class="btn sm danger btnDeletePersona" data-id="${esc(p.persona_id)}">Удалить</button>
         </div>
         <div class="persona-edit-form" id="edit-${esc(p.persona_id)}" style="display:none;"></div>
-      </div>
+      </details>
     `).join("");
 
     box.querySelectorAll(".btnEditPersona").forEach((btn) => {
@@ -1977,15 +2036,15 @@ async function loadSkillsView() {
     const skills = await getSkillsCatalog();
     if (!skills.length) { box.innerHTML = `<div class="empty-state">Скилов нет</div>`; return; }
     box.innerHTML = skills.map((s) => `
-      <div class="rule-card collapsible-card" data-id="${esc(s.skill_id)}" data-collapse-key="skill:${esc(s.skill_id)}">
-        <div class="rule-card-top collapse-header" role="button" tabindex="0" aria-expanded="true">
+      <details class="fold-item rule-card" data-id="${esc(s.skill_id)}">
+<summary class="rule-card-top">
           <div class="collapse-heading">
             <span class="tag">${esc(s.skill_id)}</span>
             <span class="tag">v${esc(String(s.version))}</span>
+            <span class="fold-preview">${esc(s.trigger_description || "")}</span>
           </div>
-          <button class="collapse-toggle" type="button" aria-label="Свернуть карточку" title="Свернуть">⌃</button>
-        </div>
-        <div class="collapse-body">
+          </summary>
+        <div class="fold-body">
           <div class="rule-text"><b>Триггер:</b> ${esc(s.trigger_description)}</div>
           <div class="rule-text" style="margin-top:6px; white-space:pre-wrap;">${esc(s.full_instruction_text || "")}</div>
           <div class="rule-meta">
@@ -1996,7 +2055,7 @@ async function loadSkillsView() {
             <button class="btn sm danger" data-act="delete">удалить</button>
           </div>
         </div>
-      </div>
+      </details>
     `).join("");
 
     initCollapsibleCards(box);
@@ -2050,15 +2109,15 @@ async function loadRules() {
     if (!rules.length) { box.innerHTML = `<div class="empty-state">Правил нет</div>`; return; }
     rules.sort((a, b) => b.created_at - a.created_at);
     box.innerHTML = rules.map((r) => `
-      <div class="rule-card collapsible-card" data-id="${esc(r.id)}" data-collapse-key="rule:${esc(r.id)}">
-        <div class="rule-card-top collapse-header" role="button" tabindex="0" aria-expanded="true">
+      <details class="fold-item rule-card" data-id="${esc(r.id)}">
+<summary class="rule-card-top">
           <div class="collapse-heading">
             <span class="badge-status ${esc(r.status)}">${esc(r.status)}</span>
             <span class="tag">${esc(r.scope)}${r.persona_id ? " · " + esc(r.persona_id) : ""}${r.space_id ? " · " + esc(r.space_id) : ""}</span>
+            <span class="fold-preview">${esc(r.rule_text || "")}</span>
           </div>
-          <button class="collapse-toggle" type="button" aria-label="Свернуть карточку" title="Свернуть">⌃</button>
-        </div>
-        <div class="collapse-body">
+          </summary>
+        <div class="fold-body">
           <div class="rule-text">${esc(r.rule_text)}</div>
           ${r.trigger_context ? `<div style="color:var(--text-faint); font-size:11.5px; margin-bottom:6px;">из: ${esc(r.trigger_context)}</div>` : ""}
           <div class="rule-meta">
@@ -2074,7 +2133,7 @@ async function loadRules() {
           <button class="btn sm danger" data-act="delete">удалить</button>
           </div>
         </div>
-      </div>
+      </details>
     `).join("");
 
     initCollapsibleCards(box);
@@ -2122,15 +2181,15 @@ async function loadFunctions() {
       const impl = JSON.stringify(f.implementation || {}, null, 2);
       const params = JSON.stringify(f.parameters || {}, null, 2);
       return `
-        <div class="rule-card collapsible-card" data-id="${esc(f.id)}" data-collapse-key="function:${esc(f.id)}">
-          <div class="rule-card-top collapse-header" role="button" tabindex="0" aria-expanded="true">
+        <details class="fold-item rule-card" data-id="${esc(f.id)}">
+<summary class="rule-card-top">
             <div class="collapse-heading">
               <span class="badge-status ${esc(f.status)}">${esc(f.status)}</span>
               <span class="tag">${esc(f.kind)} · ${esc(f.name)}</span>
+              <span class="fold-preview">${esc(f.description || "")}</span>
             </div>
-            <button class="collapse-toggle" type="button" aria-label="Свернуть карточку" title="Свернуть">⌃</button>
-          </div>
-          <div class="collapse-body">
+            </summary>
+          <div class="fold-body">
             <div class="rule-text">${esc(f.description || "Без описания")}</div>
             <div class="grid grid-2" style="margin-top:8px;">
               <div><div class="section-title" style="font-size:11px;">parameters</div><pre class="mono" style="white-space:pre-wrap;">${esc(params)}</pre></div>
@@ -2145,7 +2204,7 @@ async function loadFunctions() {
               <button class="btn sm danger" data-act="delete">удалить</button>
             </div>
           </div>
-        </div>`;
+        </details>`;
     }).join("");
     initCollapsibleCards(box);
     box.querySelectorAll(".rule-card").forEach((card) => {
@@ -3178,3 +3237,14 @@ init();
     });
   });
 })();
+
+/* ===================== folds: remember open/closed state per viewer (localStorage, best effort) ===================== */
+function foldsInit() {
+  document.querySelectorAll("details.fold[data-fold]").forEach((d) => {
+    const key = "pai.fold." + d.dataset.fold;
+    try { const v = localStorage.getItem(key); if (v === "1" || v === "0") d.open = v === "1"; } catch (_) { /* storage blocked */ }
+    d.addEventListener("toggle", () => { try { localStorage.setItem(key, d.open ? "1" : "0"); } catch (_) { /* ignore */ } });
+  });
+}
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", foldsInit);
+else foldsInit();

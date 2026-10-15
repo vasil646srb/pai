@@ -25,11 +25,29 @@ def register(app: FastAPI) -> None:
 
     init_services(app.state.secret_store, app.state.llm_config_store.path.parent)
 
-    from ...telegram import send_manual, set_classifier, set_responder
-    from ...telegram_agent import classify, make_responder
+    from ...telegram import send_manual, set_classifier, set_options_source, set_owner_responder, set_responder
+    from ...telegram_agent import GROUP_SPACE, classify, group_persona, make_owner_responder, make_responder
 
+    app.state.personas.ephemeral(group_persona())  # isolated persona for group replies, never saved to personas.json
     set_classifier(classify)  # Jev: does a group message need an answer?
-    set_responder(make_responder(app.state.orchestrator))  # persona brain writes the answer
+    set_responder(make_responder(app.state.orchestrator, app.state.personas))  # persona telegram_group writes the answer
+    set_owner_responder(make_owner_responder(app.state.orchestrator))  # owner's private messages = brain commands
+
+    def _tg_options() -> dict:
+        """What the Telegram page offers: group-safe tools (+ active custom functions) and memory spaces."""
+        from ...telegram import GROUP_TOOL_OPTIONS
+        custom = []
+        cf = getattr(app.state, "custom_functions", None)
+        if cf is not None:
+            custom = [f.name for f in cf.active()]
+        spaces = {"personal", GROUP_SPACE}
+        spaces.update(app.state.storage.stats()["by_space"].keys())
+        for p in app.state.personas.all():
+            spaces.update(p.memory_filter.allow_spaces)
+        return {"tools": list(GROUP_TOOL_OPTIONS) + [c for c in custom if c not in GROUP_TOOL_OPTIONS],
+                "spaces": sorted(s for s in spaces if s)}
+
+    set_options_source(_tg_options)
 
     def _tg(fn):
         try:
@@ -51,6 +69,8 @@ def register(app: FastAPI) -> None:
                 s.save_channels(body["channels"])
             if "group_auto_reply" in body:
                 s.set_auto_reply(bool(body["group_auto_reply"]))
+            if isinstance(body.get("policy"), dict):
+                s.save_policy(body["policy"])
             return s.public_view()
         return _tg(run)
 
@@ -75,6 +95,15 @@ def register(app: FastAPI) -> None:
     @app.post("/telegram/process")
     def tg_process():
         return _tg(lambda: get_services().process_group())
+
+    @app.post("/telegram/process_owner")
+    def tg_process_owner():
+        return _tg(lambda: get_services().process_owner())
+
+    @app.get("/telegram/options")
+    def tg_options_get():
+        from ...telegram import tg_options
+        return tg_options()
 
     @app.get("/telegram/inbox")
     def tg_inbox():

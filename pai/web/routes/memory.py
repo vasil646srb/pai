@@ -17,7 +17,8 @@ from ...models import (
 )
 from ...orchestrator import Orchestrator
 from ...storage import Storage
-from ..deps import get_orchestrator, get_storage
+from ...personas import PersonaRegistry
+from ..deps import get_orchestrator, get_personas, get_storage
 from ..util import iso_to_ts
 
 
@@ -25,6 +26,15 @@ def register(app: FastAPI) -> None:
     @app.get("/spaces")
     def list_spaces(storage: Storage = Depends(get_storage)):
         return storage.stats()["by_space"]
+
+    @app.get("/memory/spaces", response_model=list[str])
+    def memory_spaces(storage: Storage = Depends(get_storage), personas: PersonaRegistry = Depends(get_personas)):
+        """Every space the UI should offer: spaces with data, plus spaces any persona is allowed or denied."""
+        names = {"personal"}
+        names.update(storage.stats()["by_space"].keys())
+        for p in personas.all():
+            names.update(p.memory_filter.allow_spaces)
+        return sorted(n for n in names if n)
 
     @app.get("/memory/stats")
     def memory_stats(storage: Storage = Depends(get_storage), orch: Orchestrator = Depends(get_orchestrator)):

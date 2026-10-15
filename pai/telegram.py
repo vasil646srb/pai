@@ -33,6 +33,21 @@ DEFAULT_CHANNELS = [
 QUEUE_KEEP = 200  # finished items kept for history
 INBOX_KEEP = 500
 UPDATE_TYPES = ["message", "channel_post"]
+# Group messages older than this are not answered (first poll after a restart can return a backlog).
+ANALYSIS_KEYS = ("verdict", "needs_reply", "analyzed", "tries", "reply", "held", "draft", "error")
+POLICY_DEFAULTS = {
+    "owner_id": 0,                    # numeric Telegram user id of the owner; 0 = not set
+    "owner_commands": False,          # private messages from the owner are commands for the brain persona
+    "owner_space": "personal",        # memory space the owner's commands run in
+    "group_tools": ["web_search"],    # tools of the group persona (GROUP_TOOL_OPTIONS + active custom functions)
+    "group_spaces": [],               # extra spaces the group persona may READ (its own group space is always on)
+    "jev_min_confidence": 0.6,        # Jev threshold for "needs a reply": higher = stricter
+    "jev_reply_kinds": ["question", "request", "chat", "other"],
+}
+GROUP_TOOL_OPTIONS = ("get_fragment", "search_archive", "calculate_time_delta",
+                      "list_fragments_by_timeframe", "web_search", "web_fetch")
+JEV_KINDS = ("question", "request", "chat", "other", "spam")
+MAX_POLICY_SPACES = 20
 
 
 class TelegramError(Exception):
@@ -53,6 +68,8 @@ class TelegramService:
         self.api_base = (api_base or os.environ.get("PAI_TELEGRAM_API") or "https://api.telegram.org").rstrip("/")
         self._lock = threading.Lock()
         self._poll_lock = threading.Lock()
+        self._group_lock = threading.Lock()  # background poller and the "process now" button must not answer twice
+        self._owner_lock = threading.Lock()
 
     # ---------- settings ----------
     @property
@@ -78,6 +95,51 @@ class TelegramService:
             return d if isinstance(d, dict) else {}
         except (OSError, ValueError):
             return {}
+
+    def policy(self) -> dict:
+        saved = self._settings_doc().get("policy")
+        saved = saved if isinstance(saved, dict) else {}
+        return {**POLICY_DEFAULTS, **{k: saved[k] for k in POLICY_DEFAULTS if k in saved}}
+
+    def save_policy(self, body: dict) -> None:
+        new = dict(self.policy())
+        if "owner_id" in body:
+            raw = str(body.get("owner_id") or "").strip()
+            if raw and not raw.isdigit():
+                raise TelegramError("ID владельца: только цифры (числовой Telegram ID, например 123456789)")
+            new["owner_id"] = int(raw) if raw else 0
+        if "owner_commands" in body:
+            new["owner_commands"] = bool(body["owner_commands"])
+        if "owner_space" in body:
+            new["owner_space"] = (str(body["owner_space"] or "").strip()[:80]) or "personal"
+        opts = tg_options()
+        if "group_tools" in body:
+            tools = [str(t) for t in (body["group_tools"] or [])]
+            bad = [t for t in tools if t not in opts["tools"]]
+            if bad:
+                raise TelegramError(f"инструменты группы недоступны: {', '.join(bad)}")
+            new["group_tools"] = list(dict.fromkeys(tools))
+        if "group_spaces" in body:
+            spaces = [str(x).strip() for x in (body["group_spaces"] or []) if str(x).strip()]
+            if len(spaces) > MAX_POLICY_SPACES:
+                raise TelegramError(f"пространств памяти не больше {MAX_POLICY_SPACES}")
+            new["group_spaces"] = list(dict.fromkeys(spaces))
+        if "jev_min_confidence" in body:
+            try:
+                v = float(body["jev_min_confidence"])
+            except (TypeError, ValueError):
+                raise TelegramError("порог Jev: число от 0.5 до 0.95")
+            new["jev_min_confidence"] = round(min(0.95, max(0.5, v)), 2)
+        if "jev_reply_kinds" in body:
+            kinds = [str(k) for k in (body["jev_reply_kinds"] or [])]
+            bad = [k for k in kinds if k not in JEV_KINDS]
+            if bad:
+                raise TelegramError(f"неизвестные типы сообщений: {', '.join(bad)}")
+            new["jev_reply_kinds"] = [k for k in JEV_KINDS if k in kinds]
+        doc = self._settings_doc()
+        doc["policy"] = new
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self._settings_path.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
 
     def auto_reply_enabled(self) -> bool:
         return bool(self._settings_doc().get("group_auto_reply", True))
@@ -123,6 +185,7 @@ class TelegramService:
             "token_preview": f"{'*' * max(0, len(tok) - 4)}{tok[-4:]}" if tok else "",
             "channels": self.channels(),
             "group_auto_reply": self.auto_reply_enabled(),
+            "policy": self.policy(),
             "api_base": self.api_base,
         }
 
@@ -216,6 +279,8 @@ class TelegramService:
         """Fetch new updates from Telegram and keep messages of configured read-enabled chats. Idempotent."""
         with self._poll_lock:
             off = self._offset()
+            owner_id = self.policy()["owner_id"]
+            pairing: list = []
             payload = {"timeout": 0, "allowed_updates": UPDATE_TYPES, "limit": 100}
             if off:
                 payload["offset"] = off + 1
@@ -233,6 +298,25 @@ class TelegramService:
                     if not msg:
                         continue
                     chat = msg.get("chat", {})
+                    if chat.get("type") == "private":
+                        sender_id = (msg.get("from") or {}).get("id")
+                        if not sender_id:
+                            continue
+                        if not owner_id:
+                            pairing.append(sender_id)  # no owner yet: tell the sender their id, store nothing
+                        elif sender_id == owner_id:
+                            item_id = f"{chat.get('id')}:{msg.get('message_id')}"
+                            if item_id not in seen:
+                                sender = msg.get("from") or {}
+                                inbox.append({
+                                    "id": item_id, "channel": "owner", "chat_title": "",
+                                    "from": sender.get("username") or sender.get("first_name") or "",
+                                    "text": (msg.get("text") or "")[:2000], "date": msg.get("date"),
+                                    "read": False, "bot": False, "chat_id": chat.get("id"),
+                                })
+                                seen.add(item_id)
+                                new += 1
+                        continue
                     ch = self._match_channel(chat)
                     if ch is None:
                         continue
@@ -251,6 +335,12 @@ class TelegramService:
                     new += 1
                 self._save_inbox(inbox)
             self._set_offset(last)  # after the inbox is saved: a crash re-reads and dedupes by id
+            for uid in dict.fromkeys(pairing):
+                try:
+                    self._send(str(uid), f"Ваш Telegram ID: {uid}. Укажите его в PAI → Telegram → Владелец, "
+                                         "чтобы включить команды.")
+                except TelegramError:
+                    pass
             return {"new": new, "fetched": len(updates)}
 
     def process_group(self, limit: int = 5) -> dict:
@@ -260,11 +350,24 @@ class TelegramService:
             return {"processed": 0, "reason": "агент не подключён"}
         if not self.auto_reply_enabled():
             return {"processed": 0, "reason": "автоответы выключены"}
+        if not self._group_lock.acquire(blocking=False):
+            return {"processed": 0, "reason": "уже обрабатывается"}
+        try:
+            return self._process_group(limit)
+        finally:
+            self._group_lock.release()
+
+    def _process_group(self, limit: int) -> dict:
         with self._lock:
             items = self._load_inbox()
         todo = [i for i in items if i.get("channel") == "group" and not i.get("analyzed") and not i.get("bot")][:limit]
+        pol = self.policy()
         handled = 0
+        max_age = _max_age()
         for it in todo:
+            if max_age and it.get("date") and time.time() - int(it["date"]) > max_age:
+                it["analyzed"], it["verdict"] = True, "stale"  # old backlog: never answer it late
+                continue
             if _classifier is not None:
                 try:
                     verdict = _classifier(it.get("text", ""), it.get("from", ""))
@@ -280,12 +383,13 @@ class TelegramService:
                 verdict = {"needs_reply": True, "kind": "unknown"}
             it["verdict"], it["needs_reply"], it["analyzed"] = verdict["kind"], verdict["needs_reply"], True
             handled += 1
-            if verdict["kind"] == "spam" or not verdict["needs_reply"]:
+            if (verdict["kind"] == "spam" or not verdict["needs_reply"]
+                    or (verdict["kind"] != "unknown" and verdict["kind"] not in pol["jev_reply_kinds"])):
                 continue
             try:
                 reply = _responder(it)
                 if reply:
-                    r = self.submit("group", reply, verified=True)
+                    r = self.submit("group", reply, verified=True, reply_to=_source_message_id(it))
                     it["reply"] = {"status": r.get("status"), "id": r.get("id"), "error": r.get("error", "")}
             except HeldReply as h:
                 it["held"], it["draft"] = str(h), h.draft
@@ -294,10 +398,57 @@ class TelegramService:
             except Exception as e:
                 _log.exception("telegram responder failed")
                 it["error"] = f"{type(e).__name__}"
+        with self._lock:  # re-read: telegram_read may have marked items read meanwhile; copy only analysis fields
+            byid = {i["id"]: i for i in todo}
+            fresh = self._load_inbox()
+            for f in fresh:
+                src = byid.get(f["id"])
+                if src is not None:
+                    f.update({k: src[k] for k in ANALYSIS_KEYS if k in src})
+            self._save_inbox(fresh)
+        return {"processed": handled, "checked": len(todo)}
+
+    def process_owner(self, limit: int = 3) -> dict:
+        """Owner's private messages are commands: the owner's responder runs them and the answer goes back
+        to the owner's private chat. Not behind the approval queue: the owner is the one who asked."""
+        if _owner_responder is None:
+            return {"processed": 0, "reason": "агент не подключён"}
+        pol = self.policy()
+        if not pol["owner_commands"] or not pol["owner_id"]:
+            return {"processed": 0, "reason": "команды владельца выключены"}
+        if not self._owner_lock.acquire(blocking=False):
+            return {"processed": 0, "reason": "уже выполняется"}
+        try:
+            return self._process_owner(limit, pol["owner_id"])
+        finally:
+            self._owner_lock.release()
+
+    def _process_owner(self, limit: int, owner_id: int) -> dict:
+        with self._lock:
+            items = self._load_inbox()
+        todo = [i for i in items if i.get("channel") == "owner" and not i.get("analyzed")][:limit]
+        for it in todo:
+            it["analyzed"] = True
+            try:
+                reply = _owner_responder(it) or "(готово, текстового ответа нет)"
+            except Exception as e:
+                _log.exception("owner command failed")
+                reply = f"ошибка выполнения: {type(e).__name__}"
+            try:
+                for part in _chunks(reply):
+                    self._send(str(owner_id), part, reply_to=_source_message_id(it))
+                it["reply_status"] = "sent"
+            except TelegramError as e:
+                it["reply_status"], it["error"] = "failed", str(e)
         with self._lock:
             byid = {i["id"]: i for i in todo}
-            self._save_inbox([byid.get(i["id"], i) for i in self._load_inbox()])
-        return {"processed": handled, "checked": len(todo)}
+            fresh = self._load_inbox()
+            for f in fresh:
+                src = byid.get(f["id"])
+                if src is not None:
+                    f.update({k: src[k] for k in ("analyzed", "reply_status", "error") if k in src})
+            self._save_inbox(fresh)
+        return {"processed": len(todo), "checked": len(todo)}
 
     def inbox_view(self) -> dict:
         items = self._load_inbox()
@@ -312,7 +463,8 @@ class TelegramService:
             note = f"не удалось проверить Telegram сейчас: {e}"
         with self._lock:
             items = self._load_inbox()
-            picked = [i for i in items if not i.get("read") and (channel == "all" or i.get("channel") == channel)]
+            picked = [i for i in items if not i.get("read") and i.get("channel") != "owner"
+                      and (channel == "all" or i.get("channel") == channel)]
             picked = picked[:limit]
             ids = {i["id"] for i in picked}
             for i in items:
@@ -323,8 +475,11 @@ class TelegramService:
             {"channel": i["channel"], "from": i["from"], "text": i["text"], "date": i["date"]} for i in picked],
             "note": note}
 
-    def _send(self, chat_id: str, text: str) -> int:
-        res = self._call("sendMessage", {"chat_id": chat_id, "text": text, "disable_web_page_preview": True})
+    def _send(self, chat_id: str, text: str, reply_to: int | None = None) -> int:
+        payload = {"chat_id": chat_id, "text": text, "disable_web_page_preview": True}
+        if reply_to:
+            payload["reply_to_message_id"] = reply_to
+        res = self._call("sendMessage", payload)
         return int(res.get("message_id", 0))
 
     # ---------- queue ----------
@@ -343,7 +498,7 @@ class TelegramService:
         self.dir.mkdir(parents=True, exist_ok=True)
         self._queue_path.write_text(json.dumps(items[-QUEUE_KEEP:], ensure_ascii=False), encoding="utf-8")
 
-    def submit(self, key: str, text: str, verified: bool = False) -> dict:
+    def submit(self, key: str, text: str, verified: bool = False, reply_to: int | None = None) -> dict:
         """verified=True only for text that passed the answer check (background replies, owner's own text).
         Unverified text (from the model via the tool) never goes out at once in public or group channels."""
         text = (text or "").strip()
@@ -356,7 +511,8 @@ class TelegramService:
         if not verified and key in ("public", "group"):
             mode = "approve"
         item = {"id": uuid.uuid4().hex[:10], "channel": key, "text": text, "status": "pending",
-                "created": time.time(), "sent": None, "message_id": None, "error": "", "verified": verified}
+                "created": time.time(), "sent": None, "message_id": None, "error": "", "verified": verified,
+                "reply_to": reply_to}
         if mode == "auto":
             return self._publish(item, ch)
         with self._lock:
@@ -367,7 +523,7 @@ class TelegramService:
 
     def _publish(self, item: dict, ch: dict) -> dict:
         try:
-            item["message_id"] = self._send(ch["chat_id"], item["text"])
+            item["message_id"] = self._send(ch["chat_id"], item["text"], item.get("reply_to"))
             item["status"], item["sent"] = "sent", time.time()
         except TelegramError as e:
             item["status"], item["error"] = "failed", str(e)
@@ -399,6 +555,8 @@ _svc: TelegramService | None = None
 _poller_started = False
 _responder = None   # fn(item) -> reply text | None   (persona brain, see telegram_agent.py)
 _classifier = None  # fn(text, sender) -> {"needs_reply": bool, "kind": str} | None   (Jev)
+_owner_responder = None  # fn(item) -> reply text | None   (brain persona runs the owner's command)
+_options_source = None   # fn() -> {"tools": [...], "spaces": [...]}
 
 
 def set_responder(fn) -> None:
@@ -411,6 +569,43 @@ def set_classifier(fn) -> None:
     _classifier = fn
 
 
+def set_owner_responder(fn) -> None:
+    global _owner_responder
+    _owner_responder = fn
+
+
+def set_options_source(fn) -> None:
+    global _options_source
+    _options_source = fn
+
+
+def tg_options() -> dict:
+    """Tools and memory spaces the Telegram page may offer. The source is set by the web layer."""
+    if _options_source is None:
+        return {"tools": list(GROUP_TOOL_OPTIONS), "spaces": []}
+    return _options_source()
+
+
+def _chunks(text: str) -> list[str]:
+    text = text or ""
+    return [text[i:i + MAX_LEN] for i in range(0, len(text), MAX_LEN)] or [""]
+
+
+def _max_age() -> int:
+    try:
+        return max(0, int(os.environ.get("PAI_TELEGRAM_MAX_AGE_SEC", "600")))
+    except ValueError:
+        return 600
+
+
+def _source_message_id(item: dict) -> int | None:
+    """Inbox ids are '<chat_id>:<message_id>'."""
+    try:
+        return int(str(item.get("id", "")).rsplit(":", 1)[1])
+    except (IndexError, ValueError):
+        return None
+
+
 def _poll_loop(interval: int) -> None:
     while True:
         time.sleep(interval)
@@ -418,6 +613,7 @@ def _poll_loop(interval: int) -> None:
             svc = get_services()
             if svc.token():
                 svc.poll()
+                svc.process_owner()
                 svc.process_group()
         except TelegramError as e:
             _log.warning("telegram poll: %s", e)
@@ -430,9 +626,9 @@ def init_services(secrets, data_dir) -> TelegramService:
     global _svc, _poller_started
     _svc = TelegramService(data_dir, secrets)
     try:
-        interval = int(os.environ.get("PAI_TELEGRAM_POLL_SEC", "60"))
+        interval = int(os.environ.get("PAI_TELEGRAM_POLL_SEC", "15"))
     except ValueError:
-        interval = 60
+        interval = 15
     if interval > 0 and not _poller_started:
         _poller_started = True
         threading.Thread(target=_poll_loop, args=(interval,), name="pai-telegram-poll", daemon=True).start()

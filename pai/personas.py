@@ -22,6 +22,9 @@ from .models import (
 )
 from .prompts import load_prompt
 
+# Process-only personas used by background jobs (see telegram_agent.py). Not listed in the UI.
+INTERNAL_PERSONA_IDS = frozenset({"telegram_group"})
+
 BRAIN_DEFAULT_TOOLS = [
     "get_fragment", "search_archive", "calculate_time_delta",
     "list_fragments_by_timeframe", "web_search", "web_fetch",

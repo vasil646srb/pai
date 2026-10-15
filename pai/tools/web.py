@@ -56,47 +56,94 @@ def _bs4_text(node):
     return "\n".join(line.strip() for line in node.get_text("\n", strip=True).splitlines() if line.strip())
 
 
-def web_search(query, limit=5, timeout=8.0):
-    """Search DuckDuckGo HTML using requests + BeautifulSoup4."""
-    limit = max(1, min(int(limit), 10))
-    try:
-        resp = _http_session().get(
-            "https://html.duckduckgo.com/html/",
-            params={"q": query},
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        raise ToolError(f"web_search network error: {e}") from e
+_DDG_HTML = "https://html.duckduckgo.com/html/"
+_DDG_LITE = "https://lite.duckduckgo.com/lite/"
+_BLOCK_MARKERS = ("anomaly-modal", "unfortunately, bots use duckduckgo", "g-recaptcha", "captcha")
 
-    soup = BeautifulSoup(resp.text, "html.parser")
-    results = []
-    seen = set()
 
-    for block in soup.select(".result"):
+def _is_blocked(status: int, text: str) -> bool:
+    if status in (202, 403, 429):
+        return True
+    low = (text or "")[:30000].lower()
+    return any(m in low for m in _BLOCK_MARKERS)
+
+
+def _parse_ddg_html(text: str) -> list[dict]:
+    """Markup of html.duckduckgo.com: one .result block per hit, title link a.result__a."""
+    soup = BeautifulSoup(text, "html.parser")
+    out = []
+    for block in soup.select(".result, .web-result"):
         link = block.select_one("a.result__a")
-        if not link:
+        if link is None:
             continue
-        href = _ddg_unwrap(link.get("href", ""))
-        title = link.get_text(" ", strip=True)
-        snippet_el = block.select_one(".result__snippet")
-        snippet = snippet_el.get_text(" ", strip=True) if snippet_el else ""
-        if not href or not title or href in seen:
-            continue
-        if not href.startswith(("http://", "https://")):
+        snip = block.select_one(".result__snippet")
+        out.append({"title": link.get_text(" ", strip=True), "href": link.get("href", ""),
+                    "snippet": snip.get_text(" ", strip=True) if snip else ""})
+    return out
+
+
+def _parse_ddg_lite(text: str) -> list[dict]:
+    """Markup of lite.duckduckgo.com: a.result-link in a row, snippet in the next row's .result-snippet."""
+    soup = BeautifulSoup(text, "html.parser")
+    out = []
+    for link in soup.select("a.result-link"):
+        snippet = ""
+        row = link.find_parent("tr")
+        nxt = row.find_next_sibling("tr") if row is not None else None
+        if nxt is not None:
+            sn = nxt.select_one(".result-snippet")
+            snippet = sn.get_text(" ", strip=True) if sn else ""
+        out.append({"title": link.get_text(" ", strip=True), "href": link.get("href", ""), "snippet": snippet})
+    return out
+
+
+def _normalize_hits(raw: list[dict], limit: int) -> list[dict]:
+    results, seen = [], set()
+    for r in raw:
+        href = _ddg_unwrap(r.get("href", "") or "")
+        title = (r.get("title") or "").strip()
+        if not title or not href.startswith(("http://", "https://")) or href in seen:
             continue
         seen.add(href)
-        results.append(
-            {
-                "title": title,
-                "url": href,
-                "snippet": snippet[:300],
-            }
-        )
+        results.append({"title": title, "url": href, "snippet": (r.get("snippet") or "")[:300]})
         if len(results) >= limit:
             break
-
     return results
+
+
+def web_search(query, limit=5, timeout=8.0):
+    """DuckDuckGo search: html endpoint first, lite endpoint as fallback.
+
+    Returns a list (possibly empty when the engine answered and had no hits).
+    Raises ToolError only when no backend gave a usable answer, with the reason of each."""
+    query = (query or "").strip()
+    if not query:
+        raise ToolError("web_search: пустой запрос")
+    limit = max(1, min(int(limit), 10))
+    session = _http_session()
+    backends = (("html", _DDG_HTML, _parse_ddg_html), ("lite", _DDG_LITE, _parse_ddg_lite))
+    problems, answered = [], False
+    for name, url, parser in backends:
+        try:
+            resp = session.post(url, data={"q": query, "kl": "wt-wt"}, timeout=timeout,
+                                headers={"Referer": "https://duckduckgo.com/"})
+        except requests.RequestException as e:
+            problems.append(f"{name}: сеть ({type(e).__name__})")
+            continue
+        if _is_blocked(resp.status_code, resp.text):
+            problems.append(f"{name}: HTTP {resp.status_code}, блокировка или капча")
+            continue
+        if resp.status_code != 200:
+            problems.append(f"{name}: HTTP {resp.status_code}")
+            continue
+        answered = True
+        results = _normalize_hits(parser(resp.text), limit)
+        if results:
+            return results
+        problems.append(f"{name}: пустая выдача")
+    if answered:
+        return []
+    raise ToolError("web_search недоступен: " + "; ".join(problems))
 
 
 _SECRET_REF = re.compile(r"\{\{secret:([A-Za-z0-9_.-]{1,64})\}\}")

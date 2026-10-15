@@ -17,7 +17,7 @@ from ...models import (
     Persona,
     now_ts,
 )
-from ...personas import PersonaRegistry
+from ...personas import INTERNAL_PERSONA_IDS, PersonaRegistry
 from ...tools import BRAIN_ONLY_TOOLS, TOOL_SCHEMAS
 from ..deps import get_custom_functions, get_personas
 
@@ -38,7 +38,7 @@ def register(app: FastAPI) -> None:
 
     @app.get("/personas", response_model=list[PersonaOut])
     def list_personas(personas: PersonaRegistry = Depends(get_personas)):
-        return [_persona_out(p) for p in personas.all()]
+        return [_persona_out(p) for p in personas.all() if p.persona_id not in INTERNAL_PERSONA_IDS]
 
     @app.post("/personas", response_model=PersonaOut, status_code=201)
     def create_persona(

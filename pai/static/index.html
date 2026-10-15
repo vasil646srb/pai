@@ -120,17 +120,11 @@
         <div class="empty-state">Загрузка…</div>
       </div>
 
-      <div class="section-title">Обслуживание (ручной запуск)</div>
+      <details class="fold" data-fold="overview.maint"><summary class="section-title">Обслуживание (ручной запуск)</summary>
       <p class="page-sub tight">Сжатие уже запускается автоматически при снижении свободного KV-кеша ниже 50% (см. выше). Кнопка ниже — для принудительного запуска вне очереди.</p>
       <div class="card" style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
         <select id="compressSpace">
           <option value="all">все пространства</option>
-          <option value="personal">personal</option>
-          <option value="work">work</option>
-          <option value="health">health</option>
-          <option value="finance">finance</option>
-          <option value="study">study</option>
-          <option value="shared">shared</option>
         </select>
         <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--text-dim);">
           <input type="checkbox" id="compressForceTop" checked style="accent-color: var(--accent-live);" />
@@ -139,9 +133,11 @@
         <button class="btn primary sm" id="btnCompress">Запустить сжатие</button>
         <span id="compressResult" class="mono" style="font-size:12px; color:var(--text-dim);"></span>
       </div>
+      </details>
 
-      <div class="section-title">Журнал обращений к памяти (retrieval log)</div>
+      <details class="fold" data-fold="overview.retr"><summary class="section-title">Журнал обращений к памяти (retrieval log)</summary>
       <div class="card" id="retrievalLog"><div class="empty-state">Загрузка…</div></div>
+      </details>
     </section>
 
     <!-- ===================== TREE / NODE INSPECTOR ===================== -->
@@ -153,12 +149,6 @@
         <input type="text" id="searchQuery" placeholder="Полнотекстовый поиск по архиву (search_archive)…" />
         <select id="searchSpace" style="max-width:150px;">
           <option value="">все пространства</option>
-          <option value="personal">personal</option>
-          <option value="work">work</option>
-          <option value="health">health</option>
-          <option value="finance">finance</option>
-          <option value="study">study</option>
-          <option value="shared">shared</option>
         </select>
         <button class="btn sm" id="btnSearch">Найти</button>
       </div>
@@ -168,12 +158,6 @@
         <div class="tree-panel">
           <div class="tree-toolbar">
             <select id="treeSpace">
-              <option value="personal">personal</option>
-              <option value="work">work</option>
-              <option value="health">health</option>
-              <option value="finance">finance</option>
-              <option value="study">study</option>
-              <option value="shared">shared</option>
             </select>
             <button class="btn sm" id="btnReloadTree">↻</button>
           </div>
@@ -193,7 +177,7 @@
 
       <div id="personaList"><div class="empty-state">Загрузка…</div></div>
 
-      <div class="section-title">Новая персона</div>
+      <details class="fold" data-fold="personas.new"><summary class="section-title">Новая персона</summary>
       <div class="card">
         <div class="grid grid-2">
           <div class="field"><label>persona_id</label><input type="text" id="npId" placeholder="напр. coach" /></div>
@@ -212,6 +196,7 @@
         <div class="field"><label>active_skill_ids</label><select id="npSkills" multiple size="4"></select></div>
         <button class="btn primary" id="btnCreatePersona">Создать персону</button>
       </div>
+      </details>
     </section>
 
     <!-- ===================== SERVICES ===================== -->
@@ -221,7 +206,7 @@
 
       <div id="serviceList"><div class="empty-state">Загрузка…</div></div>
 
-      <div class="section-title" id="serviceFormTitle">Новая служба</div>
+      <details class="fold" id="svcFold" data-fold="services.new"><summary class="section-title" id="serviceFormTitle">Новая служба</summary>
       <div class="card">
         <input type="hidden" id="svcEditId" />
         <div class="grid grid-2">
@@ -240,13 +225,22 @@
           <span class="form-msg" id="serviceMsg"></span>
         </div>
       </div>
+      </details>
     </section>
 
     <!-- ===================== SKILLS ===================== -->
     <section class="view" id="view-telegram">
       <div class="page-head"><h1>Telegram</h1>
-        <p class="page-sub">Публикации бота в каналы. Публичный канал: пост уходит только после вашего подтверждения. Приватный: сразу.</p></div>
-      <div class="card">
+        <p class="page-sub">Бот: публикации в каналы, ответы в группе и команды владельца из личных сообщений.</p></div>
+
+      <div class="llm-settings-actions">
+        <button class="btn primary" id="tgSave">Сохранить настройки</button>
+        <button class="btn ghost" id="tgCheck">Проверить бота и каналы</button></div>
+      <p class="page-sub" id="tgStatus"></p>
+      <pre class="mono al-pre" id="tgCheckOut"></pre>
+
+      <details class="card fold" open data-fold="tg.bot">
+        <summary>Бот и каналы</summary>
         <div class="field"><label>Токен бота (BotFather)</label>
           <input type="password" id="tgToken" placeholder="вставьте новый токен, чтобы заменить" autocomplete="off" />
           <div class="field-hint" id="tgTokenHint"></div></div>
@@ -263,36 +257,63 @@
         <div class="field"><label>Группа: публикации</label>
           <select id="tgGroupMode"><option value="approve">подтверждение</option><option value="auto">сразу</option></select>
           <div class="field-hint">Бот читает сообщения группы. Чтобы видеть все сообщения, а не только команды и упоминания, отключите privacy mode в @BotFather (/setprivacy → Disable) и добавьте бота в группу заново.</div></div>
+      </details>
+
+      <details class="card fold" open data-fold="tg.bot">
+        <summary>Владелец и команды</summary>
+        <div class="field"><label>Ваш Telegram ID</label>
+          <input type="text" inputmode="numeric" id="tgOwnerId" placeholder="например 123456789" />
+          <div class="field-hint">Напишите боту в личку со своего аккаунта: пока ID не задан, бот ответит вашим ID. Сообщения с этого ID из личного чата с ботом выполняются как команды: у персоны brain полный набор инструментов (shell, http, память).</div></div>
+        <div class="field"><label class="reasoning-toggle" style="font-size:13px;">
+          <input type="checkbox" id="tgOwnerCommands" /> Выполнять команды владельца</label></div>
+        <div class="field"><label>Пространство памяти для команд</label>
+          <input type="text" id="tgOwnerSpace" list="tgSpaces" placeholder="personal" />
+          <datalist id="tgSpaces"></datalist>
+          <div class="field-hint">Команды и ответы попадают в историю этого пространства.</div></div>
+      </details>
+
+      <details class="card fold" data-fold="tg.x">
+        <summary>Группа: автоответы</summary>
         <div class="field"><label class="reasoning-toggle" style="font-size:13px;">
           <input type="checkbox" id="tgAutoReply" /> Отвечать в группе автоматически</label>
           <div class="field-hint">Новые сообщения классифицирует Jev. Если нужен ответ, пишет персона brain. Ответ идёт в группу через очередь, если режим группы «подтверждение».</div></div>
-        <div class="llm-settings-actions">
-          <button class="btn primary" id="tgSave">Сохранить</button>
-          <button class="btn ghost" id="tgCheck">Проверить бота и каналы</button></div>
-        <p class="page-sub" id="tgStatus"></p>
-        <pre class="mono al-pre" id="tgCheckOut"></pre>
-      </div>
-      <div class="card">
-        <div class="section-title sub">Написать в канал или группу</div>
-        <div class="field"><label>Куда</label>
-          <select id="tgSendChannel"><option value="private">приватный (сразу)</option><option value="public">публичный (через подтверждение)</option><option value="group">группа (через подтверждение)</option></select></div>
-        <div class="field"><label>Текст</label><textarea id="tgSendText" rows="4" placeholder="до 4000 символов"></textarea></div>
-        <div class="llm-settings-actions"><button class="btn primary" id="tgSend">Отправить</button></div>
-        <p class="page-sub" id="tgSendStatus"></p>
-      </div>
-      <div class="card">
-        <div class="section-title sub">Новые сообщения (группа и каналы для чтения)</div>
+        <div class="field"><label>Строгость Jev: <span id="tgJevConfVal">0.60</span></label>
+          <input type="range" id="tgJevConf" min="0.5" max="0.95" step="0.05" />
+          <div class="field-hint">Порог уверенности, что сообщение требует ответа. Выше — отвечает реже и только на явные запросы.</div></div>
+        <div class="field"><label>Отвечать на типы сообщений</label>
+          <div>
+            <label class="tg-check"><input type="checkbox" name="tgKind" value="question"> вопрос</label>
+            <label class="tg-check"><input type="checkbox" name="tgKind" value="request"> просьба</label>
+            <label class="tg-check"><input type="checkbox" name="tgKind" value="chat"> болтовня</label>
+            <label class="tg-check"><input type="checkbox" name="tgKind" value="other"> другое</label>
+          </div>
+          <div class="field-hint">Спам не получает ответа никогда.</div></div>
+        <div class="field"><label>Инструменты персоны группы</label>
+          <div id="tgGroupTools"></div>
+          <div class="field-hint">Без shell и http. Активные пользовательские функции тоже появятся здесь.</div></div>
+        <div class="field"><label>Пространства памяти, которые видит группа</label>
+          <div id="tgGroupSpaces"></div>
+          <div class="field-hint">Пространство самой группы (telegram-group) включено всегда. Личное пространство владельца сюда не добавляйте, если не хотите, чтобы группа его видела.</div></div>
+      </details>
+
+      <details class="card fold" data-fold="tg.x">
+        <summary>Новые сообщения (группа, каналы для чтения, команды владельца)</summary>
         <div class="llm-settings-actions"><button class="btn ghost sm" id="tgPoll">Проверить новые сообщения</button>
-          <button class="btn ghost sm" id="tgProcess">Обработать сейчас</button></div>
+          <button class="btn ghost sm" id="tgProcess">Обработать группу сейчас</button>
+          <button class="btn ghost sm" id="tgProcessOwner">Выполнить команды владельца сейчас</button></div>
         <div id="tgInbox"><div class="empty-state">загрузка…</div></div>
-      </div>
-      <div class="card">
-        <div class="section-title sub">Очередь на подтверждение</div>
+      </details>
+
+      <details class="card fold" data-fold="tg.x">
+        <summary>Очередь на подтверждение</summary>
         <div id="tgQueue"><div class="empty-state">загрузка…</div></div>
         <button class="btn ghost sm" id="tgQueueRefresh">Обновить</button>
-        <div class="section-title sub" style="margin-top:14px;">История</div>
+      </details>
+
+      <details class="card fold" data-fold="tg.x">
+        <summary>История</summary>
         <div id="tgHistory"></div>
-      </div>
+      </details>
     </section>
 
     <section class="view" id="view-skills">
@@ -301,13 +322,14 @@
 
       <div id="skillList"><div class="empty-state">Загрузка…</div></div>
 
-      <div class="section-title">Новый скил</div>
+      <details class="fold" data-fold="skills.new"><summary class="section-title">Новый скил</summary>
       <div class="card">
         <div class="field"><label>skill_id</label><input type="text" id="nsId" placeholder="напр. daily_plan" /></div>
         <div class="field"><label>Триггер (когда использовать)</label><textarea id="nsTrigger" placeholder="Используй, когда пользователь…"></textarea></div>
         <div class="field"><label>Полная инструкция</label><textarea id="nsText" placeholder="Подробный текст, который подгружается при срабатывании скила" style="min-height:120px;"></textarea></div>
         <button class="btn primary" id="btnCreateSkill">Создать скил</button>
       </div>
+      </details>
     </section>
 
     <!-- ===================== RULES ===================== -->
@@ -329,7 +351,7 @@
 
       <div id="ruleList"><div class="empty-state">Загрузка…</div></div>
 
-      <div class="section-title">Новое правило (draft)</div>
+      <details class="fold" data-fold="rules.new"><summary class="section-title">Новое правило (draft)</summary>
       <div class="card">
         <div class="field"><label>Текст правила</label><textarea id="nrText" placeholder="Напр.: Если пользователь пишет «план на день», сначала показывать незакрытые обязательства."></textarea></div>
         <div class="grid grid-3">
@@ -347,6 +369,7 @@
         <div class="field"><label>Контекст срабатывания (trigger_context)</label><input type="text" id="nrTrigger" placeholder="Из чего выведено правило" /></div>
         <button class="btn primary" id="btnCreateRule">Создать draft</button>
       </div>
+      </details>
     </section>
 
     <!-- ===================== FUNCTIONS ===================== -->
@@ -367,7 +390,7 @@
 
       <div id="functionList"><div class="empty-state">Загрузка…</div></div>
 
-      <div class="section-title">Добавить функцию вручную (draft)</div>
+      <details class="fold" data-fold="functions.new"><summary class="section-title">Добавить функцию вручную (draft)</summary>
       <div class="card">
         <div class="grid grid-2">
           <div class="field"><label>Имя</label><input type="text" id="nfName" placeholder="например, summarize_text" /></div>
@@ -381,6 +404,7 @@
 Для python: {"inline_code":"def имя_функции(...):\n    ...", "timeout_seconds":30}'></textarea></div>
         <button class="btn primary" id="btnCreateFunction">Создать draft</button>
       </div>
+      </details>
     </section>
 
     <!-- ===================== USAGE ===================== -->
@@ -397,12 +421,12 @@
         <div class="card stat-card"><div class="stat-label">reasoning tokens</div><div class="stat-value" id="usageReasoning">0</div><div class="stat-hint">включая thinking/reasoning</div></div>
         <div class="card stat-card"><div class="stat-label">cached input</div><div class="stat-value" id="usageCached">0</div><div class="stat-hint">токены из prompt cache</div></div>
       </div>
-      <div class="section-title">Модели и цены OpenRouter</div>
-      <div class="card usage-table-wrap" id="usageModels"></div>
-      <div class="section-title">Последние запросы</div>
-      <div class="card usage-table-wrap" id="usageEvents"></div>
-      <div class="section-title">Вызовы по типу</div>
-      <div class="card" id="usageByKind"></div>
+      <details class="fold" data-fold="usage.models"><summary class="section-title">Модели и цены OpenRouter</summary>
+      <div class="card usage-table-wrap" id="usageModels"></div></details>
+      <details class="fold" data-fold="usage.events"><summary class="section-title">Последние запросы</summary>
+      <div class="card usage-table-wrap" id="usageEvents"></div></details>
+      <details class="fold" data-fold="usage.kind"><summary class="section-title">Вызовы по типу</summary>
+      <div class="card" id="usageByKind"></div></details>
     </section>
 
     <!-- ===================== ACTION LOG ===================== -->
@@ -451,7 +475,7 @@
       </div>
       <p class="page-sub" id="settingsStatus"></p>
 
-      <div class="section-title">Секреты основной персоны (логины, токены)</div>
+      <details class="fold" data-fold="settings.secrets"><summary class="section-title">Секреты основной персоны (логины, токены)</summary>
       <p class="page-sub tight">Ассистент подставляет значение как <code>{{secret:имя}}</code> в http-запрос. Само значение он не видит и в ответах оно маскируется. Здесь видны только имена.</p>
       <div class="settings-row">
         <div class="field"><label>Имя</label><input type="text" id="secretName" placeholder="напр. router_pass" /></div>
@@ -461,10 +485,13 @@
       <p class="page-sub" id="secretMsg"></p>
       <div id="secretList"></div>
 
+      </details>
+
       <div class="section-title">LLM-провайдер</div>
       <p class="page-sub tight">Куда оркестратор отправляет запросы к модели — свой vLMM-сервер, OpenRouter или любой другой OpenAI-совместимый endpoint. Изменения применяются сразу, без перезапуска сервера.</p>
 
       <div class="card" id="llmSettingsCard">
+      <details class="fold" open data-fold="settings.models"><summary class="section-title sub">Провайдер и модели</summary>
         <div class="llm-settings-grid">
           <div class="field">
             <label>Base URL</label>
@@ -612,7 +639,8 @@
           </div>
         </div>
 
-        <div class="section-title sub">Параметры генерации</div>
+      </details>
+      <details class="fold" open data-fold="settings.gen"><summary class="section-title sub">Параметры генерации</summary>
         <p class="page-sub tight">Применяются к каждому запросу к модели.</p>
         <div class="llm-settings-grid">
           <div class="field">
@@ -632,7 +660,8 @@
           </div>
         </div>
 
-        <div class="section-title sub">Продвинутые параметры</div>
+      </details>
+      <details class="fold" data-fold="settings.adv"><summary class="section-title sub">Продвинутые параметры</summary>
         <p class="page-sub tight">Для опытных пользователей — дополнительные настройки поведения модели.</p>
         <div class="llm-settings-grid">
           <div class="field">
@@ -667,7 +696,8 @@
           </div>
         </div>
 
-        <div class="section-title sub">Ризонинг (thinking tokens)</div>
+      </details>
+      <details class="fold" data-fold="settings.reason"><summary class="section-title sub">Ризонинг (thinking tokens)</summary>
         <p class="page-sub tight">Для моделей вроде openai/gpt-oss-120b на OpenRouter — запрашивает и показывает в чате цепочку рассуждений модели перед финальным ответом. Игнорируется провайдерами/моделями, которые этого не поддерживают.</p>
         <div class="llm-settings-grid">
           <div class="field">
@@ -686,7 +716,8 @@
             </select>
           </div>
         </div>
-        <div class="section-title sub">Проверка ответа (Jev)</div>
+      </details>
+      <details class="fold" data-fold="settings.jev"><summary class="section-title sub">Проверка ответа (Jev)</summary>
         <div class="llm-settings-grid">
           <div class="field">
             <label class="reasoning-toggle" style="font-size:13px;">
@@ -697,11 +728,14 @@
             <div class="field-hint" id="jevVerifyStatus"></div>
           </div>
         </div>
+      </details>
+      <div class="savebar">
         <div class="llm-settings-actions">
           <button class="btn primary" id="btnSaveLlmSettings">Сохранить и применить</button>
           <span class="llm-status-pill" id="llmStatusPill"></span>
         </div>
         <p class="page-sub" id="llmSettingsStatus" style="margin-top:8px;"></p>
+      </div>
       </div>
     </section>
 

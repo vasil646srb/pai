@@ -1485,3 +1485,26 @@ img, svg, video, canvas { max-width: 100%; height: auto; }
 
 .auth-guest { text-align: center; font-size: 14px; color: var(--accent-live); text-decoration: none; margin-top: 12px; display: block; }
 .auth-guest:hover { text-decoration: underline; }
+
+
+/* ===== Shared pattern: folds (sections, forms) and fold-items (list entries). Open state is remembered per viewer. ===== */
+.fold { margin: 14px 0; }
+.fold > summary { cursor: pointer; list-style: none; font-weight: 600; padding: 4px 0; }
+.fold-item > summary, .fold > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.fold > summary::-webkit-details-marker, .fold-item > summary::-webkit-details-marker { display: none; }
+.fold > summary::before, .fold-item > summary::before {
+  content: "▸"; display: inline-block; width: 14px; color: var(--text-dim); font-size: 12px; flex: 0 0 auto; }
+.fold[open] > summary::before, .fold-item[open] > summary::before { content: "▾"; }
+.fold-item:not(.rule-card):not(.persona-card) {
+  margin: 8px 0; padding: 8px 10px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); background: var(--surface); }
+.fold-item.rule-card, .fold-item.persona-card { margin: 10px 0; }
+.fold-item[open] > summary { margin-bottom: 8px; }
+.fold-item > summary > .persona-card-top, .fold-item > summary.rule-card-top { flex: 1 1 auto; min-width: 0; }
+.fold-body { padding-top: 2px; }
+.fold-preview { color: var(--text-dim); font-weight: 400; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.savebar {
+  position: sticky; bottom: 0; z-index: 4; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  padding: 10px 0; margin-top: 12px; background: var(--surface); border-top: 1px solid var(--border-soft); }
+.fold-item > summary { justify-content: flex-start; }
+.fold-item > summary > .fold-preview { flex: 1 1 200px; font-size: 13px; }
+.tg-check { display: inline-flex; gap: 4px; margin: 4px 12px 4px 0; font-size: 13px; align-items: center; }
