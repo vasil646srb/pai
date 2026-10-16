@@ -9,15 +9,19 @@ Env: PAI_TELEGRAM_API overrides the API base (tests use a fake server).
 """
 from __future__ import annotations
 
+import html as _html
 import json
 import logging
 import os
+import re
 import threading
 import time
 import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
+
+# Markdown -> Telegram HTML and message splitting (see md_to_tg_html).
 
 _log = logging.getLogger(__name__)
 
@@ -32,10 +36,19 @@ DEFAULT_CHANNELS = [
 ]
 QUEUE_KEEP = 200  # finished items kept for history
 INBOX_KEEP = 500
-UPDATE_TYPES = ["message", "channel_post"]
+UPDATE_TYPES = ["message", "channel_post", "callback_query"]
+# Reactions shown on the incoming message while the assistant works on it.
+REACT_PROCESSING = "👀"   # picked up, working on it
+REACT_DONE = "👍"         # reply sent / published
+REACT_HELD = "🤔"         # reply drafted, waiting for approval
 # Group messages older than this are not answered (first poll after a restart can return a backlog).
 ANALYSIS_KEYS = ("verdict", "needs_reply", "analyzed", "tries", "reply", "held", "draft", "error")
+# Telegram has no font-size control for bots: the owner sets how long one message may be, per destination.
+TEXT_SIZES = {"short": 600, "normal": 1500, "long": 4000}
+TEXT_SIZE_KEYS = ("owner", "public", "private", "group")
+DEFAULT_TEXT_SIZES = {"owner": "normal", "public": "normal", "private": "long", "group": "short"}
 POLICY_DEFAULTS = {
+    "text_sizes": dict(DEFAULT_TEXT_SIZES),  # destination -> short | normal | long
     "owner_id": 0,                    # numeric Telegram user id of the owner; 0 = not set
     "owner_commands": False,          # private messages from the owner are commands for the brain persona
     "owner_space": "personal",        # memory space the owner's commands run in
@@ -101,6 +114,11 @@ class TelegramService:
         saved = saved if isinstance(saved, dict) else {}
         return {**POLICY_DEFAULTS, **{k: saved[k] for k in POLICY_DEFAULTS if k in saved}}
 
+    def text_limit(self, destination: str) -> int:
+        """Max characters of one message for owner / public / private / group."""
+        size = self.policy()["text_sizes"].get(destination, "normal")
+        return TEXT_SIZES.get(size, TEXT_SIZES["normal"])
+
     def save_policy(self, body: dict) -> None:
         new = dict(self.policy())
         if "owner_id" in body:
@@ -136,6 +154,14 @@ class TelegramService:
             if bad:
                 raise TelegramError(f"неизвестные типы сообщений: {', '.join(bad)}")
             new["jev_reply_kinds"] = [k for k in JEV_KINDS if k in kinds]
+        if "text_sizes" in body:
+            sizes = dict(new["text_sizes"])
+            raw = body["text_sizes"] or {}
+            for key, val in raw.items():
+                if key not in TEXT_SIZE_KEYS or val not in TEXT_SIZES:
+                    raise TelegramError(f"размер сообщения: неизвестное значение {key}={val}")
+                sizes[key] = val
+            new["text_sizes"] = {k: sizes.get(k, DEFAULT_TEXT_SIZES[k]) for k in TEXT_SIZE_KEYS}
         doc = self._settings_doc()
         doc["policy"] = new
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -281,6 +307,7 @@ class TelegramService:
             off = self._offset()
             owner_id = self.policy()["owner_id"]
             pairing: list = []
+            callbacks: list = []
             payload = {"timeout": 0, "allowed_updates": UPDATE_TYPES, "limit": 100}
             if off:
                 payload["offset"] = off + 1
@@ -294,6 +321,9 @@ class TelegramService:
                 new = 0
                 for u in updates:
                     last = max(last, int(u.get("update_id", 0)))
+                    if u.get("callback_query"):
+                        callbacks.append(u["callback_query"])
+                        continue
                     msg = u.get("message") or u.get("channel_post")
                     if not msg:
                         continue
@@ -335,6 +365,11 @@ class TelegramService:
                     new += 1
                 self._save_inbox(inbox)
             self._set_offset(last)  # after the inbox is saved: a crash re-reads and dedupes by id
+            for cq in callbacks:
+                try:
+                    self._on_callback(cq)
+                except Exception:
+                    _log.exception("telegram callback failed")
             for uid in dict.fromkeys(pairing):
                 try:
                     self._send(str(uid), f"Ваш Telegram ID: {uid}. Укажите его в PAI → Telegram → Владелец, "
@@ -368,6 +403,7 @@ class TelegramService:
             if max_age and it.get("date") and time.time() - int(it["date"]) > max_age:
                 it["analyzed"], it["verdict"] = True, "stale"  # old backlog: never answer it late
                 continue
+            self._react(it["id"], REACT_PROCESSING)
             if _classifier is not None:
                 try:
                     verdict = _classifier(it.get("text", ""), it.get("from", ""))
@@ -378,6 +414,7 @@ class TelegramService:
                     it["tries"] = it.get("tries", 0) + 1
                     if it["tries"] >= 3:
                         it["analyzed"], it["verdict"] = True, "unavailable"
+                        self._react(it["id"], None)
                     continue
             else:
                 verdict = {"needs_reply": True, "kind": "unknown"}
@@ -385,19 +422,25 @@ class TelegramService:
             handled += 1
             if (verdict["kind"] == "spam" or not verdict["needs_reply"]
                     or (verdict["kind"] != "unknown" and verdict["kind"] not in pol["jev_reply_kinds"])):
+                self._react(it["id"], None)
                 continue
+            final = None
             try:
                 reply = _responder(it)
                 if reply:
+                    reply = shorten(reply, self.text_limit("group"))
                     r = self.submit("group", reply, verified=True, reply_to=_source_message_id(it))
                     it["reply"] = {"status": r.get("status"), "id": r.get("id"), "error": r.get("error", "")}
+                    final = REACT_DONE
             except HeldReply as h:
                 it["held"], it["draft"] = str(h), h.draft
+                final = REACT_HELD
             except TelegramError as e:
                 it["error"] = str(e)
             except Exception as e:
                 _log.exception("telegram responder failed")
                 it["error"] = f"{type(e).__name__}"
+            self._react(it["id"], final)
         with self._lock:  # re-read: telegram_read may have marked items read meanwhile; copy only analysis fields
             byid = {i["id"]: i for i in todo}
             fresh = self._load_inbox()
@@ -426,20 +469,32 @@ class TelegramService:
     def _process_owner(self, limit: int, owner_id: int) -> dict:
         with self._lock:
             items = self._load_inbox()
+            revising = next((i for i in self._load_queue()
+                             if i.get("status") == "pending" and i.get("revise")), None)
         todo = [i for i in items if i.get("channel") == "owner" and not i.get("analyzed")][:limit]
         for it in todo:
             it["analyzed"] = True
+            self._react(it["id"], REACT_PROCESSING)
+            prompt = it
+            if revising is not None:
+                prompt = dict(it, text=(
+                    f"Владелец просит переделать пост для канала «{revising['channel']}».\n"
+                    f"Текущий черновик:\n---\n{revising['text']}\n---\n"
+                    f"Правка владельца: {it.get('text', '')}\n\n"
+                    f"Верни новую версию текста и сразу вызови telegram_post с channel={revising['channel']}. "
+                    "Не публикуй напрямую: черновик уйдёт владельцу на подтверждение."))
             try:
-                reply = _owner_responder(it) or "(готово, текстового ответа нет)"
+                reply = _owner_responder(prompt) or "(готово, текстового ответа нет)"
             except Exception as e:
                 _log.exception("owner command failed")
                 reply = f"ошибка выполнения: {type(e).__name__}"
             try:
-                for part in _chunks(reply):
+                for part in split_text(reply, self.text_limit("owner")):
                     self._send(str(owner_id), part, reply_to=_source_message_id(it))
                 it["reply_status"] = "sent"
             except TelegramError as e:
                 it["reply_status"], it["error"] = "failed", str(e)
+            self._react(it["id"], REACT_DONE if it.get("reply_status") == "sent" else None)
         with self._lock:
             byid = {i["id"]: i for i in todo}
             fresh = self._load_inbox()
@@ -475,11 +530,28 @@ class TelegramService:
             {"channel": i["channel"], "from": i["from"], "text": i["text"], "date": i["date"]} for i in picked],
             "note": note}
 
-    def _send(self, chat_id: str, text: str, reply_to: int | None = None) -> int:
-        payload = {"chat_id": chat_id, "text": text, "disable_web_page_preview": True}
+    def _react(self, item_id: str, emoji: str | None) -> None:
+        """Set (or clear, when emoji is None) the bot's reaction on an inbox message. Never fails the flow."""
+        try:
+            chat_id, msg_id = str(item_id).rsplit(":", 1)
+            reaction = [{"type": "emoji", "emoji": emoji}] if emoji else []
+            self._call("setMessageReaction", {"chat_id": int(chat_id), "message_id": int(msg_id),
+                                              "reaction": reaction})
+        except (TelegramError, ValueError, IndexError):
+            _log.debug("setMessageReaction failed for %s", item_id, exc_info=True)
+
+    def _send(self, chat_id: str, text: str, reply_to: int | None = None, markup: dict | None = None) -> int:
+        base = {"chat_id": chat_id, "disable_web_page_preview": True}
         if reply_to:
-            payload["reply_to_message_id"] = reply_to
-        res = self._call("sendMessage", payload)
+            base["reply_to_message_id"] = reply_to
+        if markup is not None:
+            base["reply_markup"] = markup
+        try:
+            res = self._call("sendMessage", {**base, "text": md_to_tg_html(text), "parse_mode": "HTML"})
+        except TelegramError as e:
+            if "parse" not in str(e).lower() and "entit" not in str(e).lower():
+                raise
+            res = self._call("sendMessage", {**base, "text": text})  # markup rejected: send the raw text
         return int(res.get("message_id", 0))
 
     # ---------- queue ----------
@@ -504,12 +576,12 @@ class TelegramService:
         text = (text or "").strip()
         if not text:
             raise TelegramError("пустой текст")
-        if len(text) > MAX_LEN:
-            raise TelegramError(f"текст длиннее {MAX_LEN} символов")
         ch = self._channel(key)
-        mode = ch["mode"]
-        if not verified and key in ("public", "group"):
-            mode = "approve"
+        limit = self.text_limit(key)
+        if len(text) > limit:
+            raise TelegramError(f"текст длиннее {limit} символов: размер для этого канала задан в настройках Telegram, сократите текст")
+        # public: never goes out without the owner's button press, whatever the channel mode says
+        mode = "approve" if key == "public" or (not verified and key == "group") else ch["mode"]
         item = {"id": uuid.uuid4().hex[:10], "channel": key, "text": text, "status": "pending",
                 "created": time.time(), "sent": None, "message_id": None, "error": "", "verified": verified,
                 "reply_to": reply_to}
@@ -519,7 +591,199 @@ class TelegramService:
             items = self._load_queue()
             items.append(item)
             self._save_queue(items)
-        return {"id": item["id"], "status": "pending", "note": "ждёт подтверждения в настройках Telegram"}
+        if key == "public" or (key == "group" and mode == "approve"):
+            self._offer(item)
+        return {"id": item["id"], "status": "pending",
+                "note": "черновик отправлен владельцу в Telegram с кнопками подтверждения"}
+
+    # ---------- confirmation buttons in the owner's chat ----------
+    def _offer(self, item: dict) -> None:
+        """Send the draft to the owner with buttons. A new draft supersedes a draft that is being revised."""
+        owner_id = self.policy()["owner_id"]
+        if not owner_id:
+            return
+        with self._lock:
+            items = self._load_queue()
+            for old in items:
+                if old.get("status") == "pending" and old.get("revise") and old.get("id") != item["id"]:
+                    old["status"], old["revise"] = "superseded", False
+            self._save_queue(items)
+        iid = item["id"]
+        markup = {"inline_keyboard": [
+            [{"text": "✅ Опубликовать", "callback_data": f"pub:{iid}"},
+             {"text": "✏️ Переделать", "callback_data": f"rev:{iid}"}],
+            [{"text": "❌ Отменить", "callback_data": f"rej:{iid}"}],
+        ]}
+        label = {"public": "публичного канала", "group": "группы"}.get(item["channel"], "канала")
+        parts = split_text(f"Черновик для {label}:\n\n" + item["text"], 3000)
+        try:
+            for part in parts[:-1]:
+                self._send(str(owner_id), part)
+            mid = self._send(str(owner_id), parts[-1], markup=markup)
+        except TelegramError as e:
+            _log.warning("draft offer failed: %s", e)
+            return
+        self._update_item(iid, draft_msg_id=mid)
+
+    def _update_item(self, item_id: str, **fields) -> None:
+        with self._lock:
+            items = self._load_queue()
+            for i in items:
+                if i.get("id") == item_id:
+                    i.update(fields)
+            self._save_queue(items)
+
+    def _pending_item(self, item_id: str) -> dict:
+        item = next((i for i in self._load_queue() if i.get("id") == item_id), None)
+        if item is None or item.get("status") != "pending":
+            raise TelegramError("уже обработано или не найдено")
+        return item
+
+    def _answer_cb(self, cq_id: str, text: str = "") -> None:
+        try:
+            self._call("answerCallbackQuery", {"callback_query_id": cq_id, "text": text[:200]})
+        except TelegramError:
+            pass
+
+    def _edit_status(self, chat_id: str, message_id, text: str) -> None:
+        if not message_id:
+            return
+        try:
+            self._call("editMessageText", {"chat_id": chat_id, "message_id": message_id, "text": text,
+                                           "reply_markup": {"inline_keyboard": []}})
+        except TelegramError:
+            pass
+
+    def _on_callback(self, cq: dict) -> None:
+        cq_id = cq.get("id", "")
+        owner_id = self.policy()["owner_id"]
+        if not owner_id or (cq.get("from") or {}).get("id") != owner_id:
+            self._answer_cb(cq_id, "Нет доступа")
+            return
+        action, _, item_id = str(cq.get("data") or "").partition(":")
+        msg = cq.get("message") or {}
+        chat_id = str((msg.get("chat") or {}).get("id") or owner_id)
+        mid = msg.get("message_id")
+        try:
+            if action == "pub":
+                res = self._act(item_id, approve=True)
+                note = ("✅ Опубликовано." if res["status"] == "sent"
+                        else f"❌ Не отправлено: {res.get('error', '')}")
+                self._answer_cb(cq_id, note)
+                self._edit_status(chat_id, mid, note)
+            elif action == "rej":
+                self._act(item_id, approve=False)
+                self._answer_cb(cq_id, "Отменено")
+                self._edit_status(chat_id, mid, "❌ Отменено.")
+            elif action == "rev":
+                if not self.policy()["owner_commands"]:
+                    self._answer_cb(cq_id, "Включите команды владельца, чтобы править текст")
+                    return
+                self._pending_item(item_id)
+                self._update_item(item_id, revise=True)
+                self._answer_cb(cq_id, "Жду правки")
+                self._send(chat_id, "Напишите, что изменить в черновике.")
+            elif action == "cok":
+                self._run_action(item_id, cq_id, chat_id, mid)
+            elif action == "cno":
+                self._reject_action(item_id, cq_id, chat_id, mid)
+            else:
+                self._answer_cb(cq_id, "Неизвестное действие")
+        except TelegramError as e:
+            self._answer_cb(cq_id, str(e))
+
+    # ---------- confirmations of bot actions (owner presses buttons) ----------
+    @property
+    def _actions_path(self) -> Path:
+        return self.dir / "telegram_actions.json"
+
+    def _load_actions(self) -> list[dict]:
+        try:
+            d = json.loads(self._actions_path.read_text(encoding="utf-8"))
+            return d if isinstance(d, list) else []
+        except (OSError, ValueError):
+            return []
+
+    def _save_actions(self, items: list[dict]) -> None:
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self._actions_path.write_text(json.dumps(items[-QUEUE_KEEP:], ensure_ascii=False), encoding="utf-8")
+
+    def _set_action(self, item_id: str, **fields) -> None:
+        with self._lock:
+            acts = self._load_actions()
+            for a in acts:
+                if a.get("id") == item_id:
+                    a.update(fields)
+            self._save_actions(acts)
+
+    def request_action(self, question: str, tool: str, arguments: dict) -> dict:
+        """The bot asks the owner to confirm one tool call. Nothing runs until the owner presses confirm."""
+        if tool not in CONFIRMABLE_TOOLS:
+            raise TelegramError(f"инструмент {tool} нельзя запускать по подтверждению")
+        if not isinstance(arguments, dict):
+            raise TelegramError("arguments должен быть объектом")
+        if _action_executor is None:
+            raise TelegramError("исполнитель подтверждённых действий не подключён")
+        owner_id = self.policy()["owner_id"]
+        if not owner_id:
+            raise TelegramError("владелец в Telegram не задан")
+        question = (question or "").strip()[:500] or f"Выполнить {tool}"
+        iid = uuid.uuid4().hex[:10]
+        item = {"id": iid, "status": "pending", "question": question, "tool": tool,
+                "arguments": arguments, "created": time.time(), "message_id": None}
+        with self._lock:
+            acts = self._load_actions()
+            acts.append(item)
+            self._save_actions(acts)
+        details = json.dumps(arguments, ensure_ascii=False)[:800]
+        text = f"Нужно подтверждение:\n\n{question}\n\nДействие: {tool}\n{details}"
+        markup = {"inline_keyboard": [[
+            {"text": "✅ Подтвердить", "callback_data": f"cok:{iid}"},
+            {"text": "❌ Отмена", "callback_data": f"cno:{iid}"},
+        ]]}
+        try:
+            mid = self._send(str(owner_id), text, markup=markup)
+        except TelegramError:
+            self._set_action(iid, status="failed")
+            raise
+        self._set_action(iid, message_id=mid)
+        return {"status": "awaiting_confirmation", "id": iid,
+                "note": "кнопки подтверждения отправлены владельцу в Telegram; результат придёт туда же"}
+
+    def _run_action(self, item_id: str, cq_id: str, chat_id: str, mid) -> None:
+        with self._lock:
+            acts = self._load_actions()
+            item = next((a for a in acts if a.get("id") == item_id), None)
+            if item is None or item.get("status") != "pending":
+                raise TelegramError("уже обработано или не найдено")
+            if time.time() - float(item.get("created", 0)) > ACTION_TTL:
+                item["status"] = "expired"
+                self._save_actions(acts)
+                raise TelegramError("запрос устарел")
+            item["status"] = "running"  # a second press must not run it twice
+            self._save_actions(acts)
+        try:
+            result = _action_executor(item["tool"], item["arguments"])
+            ok = not (isinstance(result, dict) and result.get("tool_failed"))
+        except Exception as e:
+            _log.exception("confirmed action failed")
+            result, ok = {"tool_failed": True, "error": str(e)}, False
+        self._set_action(item_id, status="done" if ok else "failed")
+        summary = json.dumps(result, ensure_ascii=False, default=str)[:1500]
+        note = (("✅ Выполнено" if ok else "❌ Не выполнено") + f": {item['question']}\n\n{summary}")
+        self._answer_cb(cq_id, "Выполнено" if ok else "Ошибка")
+        self._edit_status(chat_id, mid, note)
+
+    def _reject_action(self, item_id: str, cq_id: str, chat_id: str, mid) -> None:
+        with self._lock:
+            acts = self._load_actions()
+            item = next((a for a in acts if a.get("id") == item_id), None)
+            if item is None or item.get("status") != "pending":
+                raise TelegramError("уже обработано или не найдено")
+            item["status"] = "rejected"
+            self._save_actions(acts)
+        self._answer_cb(cq_id, "Отменено")
+        self._edit_status(chat_id, mid, f"❌ Отменено: {item['question']}")
 
     def _publish(self, item: dict, ch: dict) -> dict:
         try:
@@ -551,12 +815,118 @@ class TelegramService:
         return self._publish(item, self._channel(item["channel"]))
 
 
+import html as _html
+import re
+
+_FENCE_RE = re.compile(r"```[^\n]*\n?(.*?)```", re.S)
+_INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
+_TABLE_LINE_RE = re.compile(r"^\s*\|.*\|\s*$")
+
+
+def md_to_tg_html(text: str) -> str:
+    """Model Markdown -> Telegram HTML (b, i, s, code, pre, a, blockquote). Telegram shows no Markdown.
+    Code is held aside first, so markup inside it is never touched; everything else is HTML-escaped."""
+    holds: list[str] = []
+
+    def hold(tag: str, content: str) -> str:
+        holds.append(f"<{tag}>{_html.escape(content, quote=False)}</{tag}>")
+        return f"\x00{len(holds) - 1}\x00"
+
+    t = _FENCE_RE.sub(lambda m: hold("pre", m.group(1).rstrip("\n")), text or "")
+    t = _INLINE_CODE_RE.sub(lambda m: hold("code", m.group(1)), t)
+
+    lines: list[str] = []
+    table: list[str] = []
+
+    def flush_table():
+        if table:
+            lines.append(hold("pre", "\n".join(table)))
+            table.clear()
+
+    for raw in t.split("\n"):
+        line = raw.rstrip()
+        if _TABLE_LINE_RE.match(line):
+            table.append(line)
+            continue
+        flush_table()
+        if re.fullmatch(r"\s*(-{3,}|\*{3,}|_{3,})\s*", line):
+            lines.append("")
+            continue
+        m = re.match(r"\s*#{1,6}\s+(.*)", line)
+        if m:
+            lines.append("**" + m.group(1).strip() + "**")
+            continue
+        m = re.match(r"\s*[-*+]\s+(.*)", line)
+        if m:
+            lines.append("• " + m.group(1))
+            continue
+        m = re.match(r"\s*>\s?(.*)", line)
+        if m:
+            lines.append("\x01Q" + m.group(1))
+            continue
+        lines.append(line)
+    flush_table()
+
+    out: list[str] = []
+    quote: list[str] = []
+    for line in lines:
+        if line.startswith("\x01Q"):
+            quote.append(_html.escape(line[2:], quote=False))
+            continue
+        if quote:
+            out.append("<blockquote>" + "\n".join(quote) + "</blockquote>")
+            quote = []
+        out.append(line if line.startswith("\x00") else _html.escape(line, quote=False))
+    if quote:
+        out.append("<blockquote>" + "\n".join(quote) + "</blockquote>")
+    s = "\n".join(out)
+
+    s = re.sub(r'\[([^\]\n]+)\]\((https?://[^\s)"<>]+)\)', lambda m: f'<a href="{m.group(2)}">{m.group(1)}</a>', s)
+    s = re.sub(r"\*\*(?=\S)(.+?)(?<=\S)\*\*", r"<b>\1</b>", s)
+    s = re.sub(r"__(?=\S)(.+?)(?<=\S)__", r"<b>\1</b>", s)
+    s = re.sub(r"(?<![\w*])\*(?=\S)([^*\n]+?)(?<=\S)\*(?![\w*])", r"<i>\1</i>", s)
+    s = re.sub(r"~~(?=\S)(.+?)(?<=\S)~~", r"<s>\1</s>", s)
+    s = re.sub(r"\x00(\d+)\x00", lambda m: holds[int(m.group(1))], s)
+    return s.strip()
+
+
+def split_text(text: str, limit: int) -> list[str]:
+    """Split at paragraph, line, sentence or word boundary so every part is at most `limit` characters."""
+    text = (text or "").strip()
+    parts: list[str] = []
+    while len(text) > limit:
+        cut = -1
+        for sep in ("\n\n", "\n", ". ", " "):
+            i = text.rfind(sep, 0, limit)
+            if i >= limit // 2:
+                cut = i + (0 if sep == "\n\n" else len(sep.rstrip()))
+                break
+        if cut <= 0:
+            cut = limit
+        parts.append(text[:cut].rstrip())
+        text = text[cut:].lstrip()
+    if text or not parts:
+        parts.append(text)
+    return parts
+
+
+def shorten(text: str, limit: int) -> str:
+    parts = split_text(text, limit)
+    return parts[0] if len(parts) == 1 else parts[0].rstrip(" ,;:") + "…"
+
+
+
+
 _svc: TelegramService | None = None
 _poller_started = False
 _responder = None   # fn(item) -> reply text | None   (persona brain, see telegram_agent.py)
 _classifier = None  # fn(text, sender) -> {"needs_reply": bool, "kind": str} | None   (Jev)
 _owner_responder = None  # fn(item) -> reply text | None   (brain persona runs the owner's command)
 _options_source = None   # fn() -> {"tools": [...], "spaces": [...]}
+_action_executor = None  # fn(tool, arguments) -> result dict   (runs a tool call the owner confirmed)
+# Tools that may run only after the owner presses confirm in Telegram.
+CONFIRMABLE_TOOLS = frozenset({"http_request", "shell_exec"})
+ACTION_TTL = 24 * 3600  # an unconfirmed request expires after a day
 
 
 def set_responder(fn) -> None:
@@ -586,9 +956,6 @@ def tg_options() -> dict:
     return _options_source()
 
 
-def _chunks(text: str) -> list[str]:
-    text = text or ""
-    return [text[i:i + MAX_LEN] for i in range(0, len(text), MAX_LEN)] or [""]
 
 
 def _max_age() -> int:
@@ -639,6 +1006,16 @@ def get_services() -> TelegramService:
     if _svc is None:
         raise TelegramError("Telegram не инициализирован")
     return _svc
+
+
+def set_action_executor(fn) -> None:
+    global _action_executor
+    _action_executor = fn
+
+
+def request_from_tool(question: str, tool: str, arguments: dict) -> dict:
+    """Entry point for the ask_confirmation tool."""
+    return get_services().request_action(question, tool, arguments)
 
 
 def post_from_tool(channel: str, text: str) -> dict:

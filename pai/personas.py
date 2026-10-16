@@ -28,7 +28,7 @@ INTERNAL_PERSONA_IDS = frozenset({"telegram_group"})
 BRAIN_DEFAULT_TOOLS = [
     "get_fragment", "search_archive", "calculate_time_delta",
     "list_fragments_by_timeframe", "web_search", "web_fetch",
-    "http_request", "shell_exec",
+    "http_request", "shell_exec", "ask_confirmation",
 ]
 
 
@@ -198,7 +198,7 @@ def default_personas() -> PersonaRegistry:
         system_core_addon=BUILTIN_ADDONS["brain"],
         active_skill_ids=[],
         memory_filter=MemoryFilter(),  # empty = all spaces allowed
-        tone="neutral, precise",
+        tone="neutral, dense, no small talk, no emotional padding",
         tool_permissions=list(BRAIN_DEFAULT_TOOLS),
     ))
 
@@ -213,7 +213,7 @@ def default_personas() -> PersonaRegistry:
         system_core_addon=BUILTIN_ADDONS["work"],
         active_skill_ids=["daily_plan", "meeting_notes"],
         memory_filter=MemoryFilter(allow_spaces=["work", "shared"], deny_tags=["diary"]),
-        tone="business, concise",
+        tone="concise, professional, result first, no emojis, no filler, no moralizing",
     ))
 
     reg.register(Persona(
@@ -225,8 +225,8 @@ def default_personas() -> PersonaRegistry:
         ),
         system_core_addon=BUILTIN_ADDONS["pm"],
         active_skill_ids=["daily_plan", "meeting_notes"],
-        memory_filter=MemoryFilter(allow_spaces=["work", "shared"]),
-        tone="proactive, accountable",
+        memory_filter=MemoryFilter(allow_spaces=["work", "shared"], deny_tags=["diary"]),
+        tone="proactive, direct, accountable, short statements, concrete dates",
     ))
 
     reg.register(Persona(
@@ -252,7 +252,7 @@ def default_personas() -> PersonaRegistry:
         system_core_addon=BUILTIN_ADDONS["tutor"],
         active_skill_ids=[],
         memory_filter=MemoryFilter(allow_spaces=["study", "shared"]),
-        tone="socratic, patient",
+        tone="patient, encouraging, precise, never condescending",
     ))
 
     for p in _builtin_new_personas():

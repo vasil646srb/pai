@@ -1,6 +1,8 @@
 """Model-facing prompt texts, kept as plain Markdown files next to this module.
 
 Edit a file to change what the model is told; `load_prompt(name)` reads `<name>.md`.
+Some prompts are read once at import time (module-level constants), so restart the
+server after editing them.
 Names with a slash address subfolders, e.g. "addons/brain".
 """
 from __future__ import annotations

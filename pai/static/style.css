@@ -1502,9 +1502,12 @@ img, svg, video, canvas { max-width: 100%; height: auto; }
 .fold-item > summary > .persona-card-top, .fold-item > summary.rule-card-top { flex: 1 1 auto; min-width: 0; }
 .fold-body { padding-top: 2px; }
 .fold-preview { color: var(--text-dim); font-weight: 400; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+/* Save bar sits at the end of its section (not sticky: on phones it covered the fields above). */
 .savebar {
-  position: sticky; bottom: 0; z-index: 4; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
-  padding: 10px 0; margin-top: 12px; background: var(--surface); border-top: 1px solid var(--border-soft); }
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  padding: 12px 0 0; margin-top: 14px; border-top: 1px solid var(--border-soft); }
+.savebar > p { margin: 0; }
+.savebar > p:empty { display: none; }
 .fold-item > summary { justify-content: flex-start; }
 .fold-item > summary > .fold-preview { flex: 1 1 200px; font-size: 13px; }
 .tg-check { display: inline-flex; gap: 4px; margin: 4px 12px 4px 0; font-size: 13px; align-items: center; }

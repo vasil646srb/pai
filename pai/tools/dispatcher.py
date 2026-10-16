@@ -77,6 +77,15 @@ class ToolDispatcher(PersonaToolsMixin, ProposalToolsMixin, MemoryToolsMixin, We
         except TelegramError as e:
             return {"tool_failed": True, "error": str(e), "tool": "telegram_post"}
 
+    def _tool_ask_confirmation(self, arguments, persona):
+        from ..telegram import TelegramError, request_from_tool
+        try:
+            return request_from_tool(str(arguments.get("question", "")), str(arguments.get("tool", "")),
+                                     arguments.get("arguments") or {})
+        except TelegramError as e:
+            return {"tool_failed": True, "tool": "ask_confirmation",
+                    "error": f"подтверждение в Telegram недоступно: {e}. Спроси подтверждение прямо в этом чате и жди ответа."}
+
     def _tool_telegram_read(self, arguments, persona):
         from ..telegram import TelegramError, read_from_tool
         try:

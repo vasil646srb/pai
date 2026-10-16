@@ -5,5 +5,7 @@ __pycache__/
 .ruff_cache/
 *.bak
 *.log
+
+# archives/backups
 *.zip
 *.tar.gz

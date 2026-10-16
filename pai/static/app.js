@@ -979,6 +979,11 @@ function tgFill(d) {
   document.getElementById("tgJevConf").value = conf;
   document.getElementById("tgJevConfVal").textContent = conf.toFixed(2);
   document.querySelectorAll('input[name="tgKind"]').forEach((cb) => { cb.checked = (p.jev_reply_kinds || []).includes(cb.value); });
+  const sz = p.text_sizes || {};
+  document.getElementById("tgSizeOwner").value = sz.owner || "normal";
+  document.getElementById("tgSizePublic").value = sz.public || "normal";
+  document.getElementById("tgSizePrivate").value = sz.private || "long";
+  document.getElementById("tgSizeGroup").value = sz.group || "short";
   tgRenderOptions(p);
 }
 function tgRenderOptions(p) {
@@ -997,6 +1002,12 @@ function tgPolicyBody() {
     group_spaces: checked("tgSpace"),
     jev_min_confidence: parseFloat(document.getElementById("tgJevConf").value),
     jev_reply_kinds: checked("tgKind"),
+    text_sizes: {
+      owner: document.getElementById("tgSizeOwner").value,
+      public: document.getElementById("tgSizePublic").value,
+      private: document.getElementById("tgSizePrivate").value,
+      group: document.getElementById("tgSizeGroup").value,
+    },
   };
 }
 async function tgLoad() {

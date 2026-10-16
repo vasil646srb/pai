@@ -33,6 +33,18 @@ def register(app: FastAPI) -> None:
     set_responder(make_responder(app.state.orchestrator, app.state.personas))  # persona telegram_group writes the answer
     set_owner_responder(make_owner_responder(app.state.orchestrator))  # owner's private messages = brain commands
 
+    from ...telegram import set_action_executor
+    from ...tools.dispatcher import ToolDispatcher
+
+    def _run_confirmed(tool: str, arguments: dict) -> dict:
+        """Runs a tool call the owner confirmed in Telegram. Only CONFIRMABLE_TOOLS reach here."""
+        orch = app.state.orchestrator
+        disp = ToolDispatcher(orch.storage, custom_functions=orch.custom_functions, llm=orch.llm,
+                              rules_manager=orch.rules, skills=orch.skills, persona_registry=orch.personas)
+        return disp.dispatch(tool, arguments, persona=None)
+
+    set_action_executor(_run_confirmed)  # owner-confirmed bot actions
+
     def _tg_options() -> dict:
         """What the Telegram page offers: group-safe tools (+ active custom functions) and memory spaces."""
         from ...telegram import GROUP_TOOL_OPTIONS

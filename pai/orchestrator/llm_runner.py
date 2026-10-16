@@ -12,7 +12,7 @@ from ..usage import estimate_tokens
 if TYPE_CHECKING:
     from .base import Orchestrator
 
-_ITERATION_LIMIT_FALLBACK = "I've reached my tool iteration limit. Let me give you my best answer based on what I know."
+_ITERATION_LIMIT_FALLBACK = load_prompt("iteration_limit_fallback")
 _ITERATION_LIMIT_NUDGE = (
     load_prompt("iteration_limit_nudge")
 )

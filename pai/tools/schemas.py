@@ -362,13 +362,31 @@ TOOL_SCHEMAS.append({
     "function": {
         "name": "telegram_post",
         "description": "Publish a text post to one of the owner's Telegram channels. 'private' is the owner's "
-                        "private channel and goes out at once. 'public' is the public channel: the post is queued "
-                        "and goes out only after the owner approves it, so tell the owner it is waiting. "
+                        "private channel and goes out at once. 'public' is the public channel: the owner gets the draft "
+                        "in Telegram with buttons (publish / revise / cancel) and it goes out only after the owner "
+                        "presses publish. Tell the owner the draft is waiting for approval. "
                         "Plain text, up to 4000 characters.",
         "parameters": {"type": "object", "properties": {
             "channel": {"type": "string", "enum": ["public", "private", "group"], "description": "Which channel."},
             "text": {"type": "string", "description": "Post text."},
         }, "required": ["channel", "text"]},
+    },
+})
+
+TOOL_SCHEMAS.append({
+    "type": "function",
+    "function": {
+        "name": "ask_confirmation",
+        "description": "Ask the owner to confirm one consequential action before it runs: an HTTP request that changes "
+                        "data (POST/PUT/PATCH/DELETE) or a local shell command. The owner gets Confirm / Cancel buttons "
+                        "in Telegram; if confirmed, the exact tool call runs and its result is sent to the owner. "
+                        "Use this instead of calling the tool directly. Returns awaiting_confirmation; then tell the "
+                        "owner the request is waiting for the buttons.",
+        "parameters": {"type": "object", "properties": {
+            "question": {"type": "string", "description": "What will be done and why, in plain words, in the owner's language. Max 500 characters."},
+            "tool": {"type": "string", "enum": ["http_request", "shell_exec"], "description": "Tool to run after confirmation."},
+            "arguments": {"type": "object", "description": "Exact arguments for that tool."},
+        }, "required": ["question", "tool", "arguments"]},
     },
 })
 

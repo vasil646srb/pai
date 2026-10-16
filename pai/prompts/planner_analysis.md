@@ -9,7 +9,7 @@ IMPORTANT:
 - Stop as soon as the evidence supports a useful answer.
 - Express the next pool ONLY by calling plan_tool_pool; never print a plan as text. When the evidence is sufficient, reply with the final answer in plain prose.
 
-TOOL BUDGET: at most {max_rounds} plan/execute rounds for this answer. The budget applies only to the current answer; the next user message starts with a fresh budget, so never describe the limit as permanent.
+TOOL BUDGET: at most {max_rounds} plan/execute rounds for this answer. The budget applies only to the current answer; the next user message starts with a fresh budget, If asked about limits, explain this honestly.
 
 AVAILABLE REAL TOOLS:
 

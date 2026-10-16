@@ -259,7 +259,23 @@
           <div class="field-hint">Бот читает сообщения группы. Чтобы видеть все сообщения, а не только команды и упоминания, отключите privacy mode в @BotFather (/setprivacy → Disable) и добавьте бота в группу заново.</div></div>
       </details>
 
-      <details class="card fold" open data-fold="tg.bot">
+      <details class="card fold" open data-fold="tg.sizes">
+        <summary>Размер сообщений</summary>
+        <div class="field-hint" style="margin-bottom:10px;">Telegram не умеет менять размер шрифта в сообщениях бота, поэтому задаётся длина одного сообщения. Заголовки, жирный, ссылки и код оформляются автоматически.</div>
+        <div class="field"><label>Личка с ботом (ваши команды)</label>
+          <select id="tgSizeOwner"><option value="short">короткое, до 600 симв.</option><option value="normal">обычное, до 1500 симв.</option><option value="long">длинное, до 4000 симв.</option></select>
+          <div class="field-hint">Длинный ответ разбивается на несколько сообщений.</div></div>
+        <div class="field"><label>Публичный канал</label>
+          <select id="tgSizePublic"><option value="short">короткое, до 600 симв.</option><option value="normal">обычное, до 1500 симв.</option><option value="long">длинное, до 4000 симв.</option></select>
+          <div class="field-hint">Пост длиннее лимита не уйдёт: модель получит ошибку и сократит текст.</div></div>
+        <div class="field"><label>Приватный канал</label>
+          <select id="tgSizePrivate"><option value="short">короткое, до 600 симв.</option><option value="normal">обычное, до 1500 симв.</option><option value="long">длинное, до 4000 симв.</option></select></div>
+        <div class="field"><label>Группа</label>
+          <select id="tgSizeGroup"><option value="short">короткое, до 600 симв.</option><option value="normal">обычное, до 1500 симв.</option><option value="long">длинное, до 4000 симв.</option></select>
+          <div class="field-hint">Ответ группы обрезается по границе предложения.</div></div>
+      </details>
+
+      <details class="card fold" open data-fold="tg.owner">
         <summary>Владелец и команды</summary>
         <div class="field"><label>Ваш Telegram ID</label>
           <input type="text" inputmode="numeric" id="tgOwnerId" placeholder="например 123456789" />
@@ -272,7 +288,7 @@
           <div class="field-hint">Команды и ответы попадают в историю этого пространства.</div></div>
       </details>
 
-      <details class="card fold" data-fold="tg.x">
+      <details class="card fold" data-fold="tg.group">
         <summary>Группа: автоответы</summary>
         <div class="field"><label class="reasoning-toggle" style="font-size:13px;">
           <input type="checkbox" id="tgAutoReply" /> Отвечать в группе автоматически</label>
@@ -296,7 +312,7 @@
           <div class="field-hint">Пространство самой группы (telegram-group) включено всегда. Личное пространство владельца сюда не добавляйте, если не хотите, чтобы группа его видела.</div></div>
       </details>
 
-      <details class="card fold" data-fold="tg.x">
+      <details class="card fold" data-fold="tg.inbox">
         <summary>Новые сообщения (группа, каналы для чтения, команды владельца)</summary>
         <div class="llm-settings-actions"><button class="btn ghost sm" id="tgPoll">Проверить новые сообщения</button>
           <button class="btn ghost sm" id="tgProcess">Обработать группу сейчас</button>
@@ -304,13 +320,13 @@
         <div id="tgInbox"><div class="empty-state">загрузка…</div></div>
       </details>
 
-      <details class="card fold" data-fold="tg.x">
+      <details class="card fold" data-fold="tg.queue">
         <summary>Очередь на подтверждение</summary>
         <div id="tgQueue"><div class="empty-state">загрузка…</div></div>
         <button class="btn ghost sm" id="tgQueueRefresh">Обновить</button>
       </details>
 
-      <details class="card fold" data-fold="tg.x">
+      <details class="card fold" data-fold="tg.history">
         <summary>История</summary>
         <div id="tgHistory"></div>
       </details>
