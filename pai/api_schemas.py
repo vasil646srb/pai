@@ -218,3 +218,7 @@ class FunctionOut(BaseModel):
     created_at: float
     validated_at: float | None
     activated_at: float | None
+
+
+class SpaceRename(BaseModel):
+    new_name: str

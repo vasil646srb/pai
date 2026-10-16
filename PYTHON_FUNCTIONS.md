@@ -1,9 +1,12 @@
 # Python custom functions
 
-Пользовательские функции поддерживают `kind: "python"`.
+Custom functions support `kind: "python"`, which lets the assistant run arbitrary
+Python code defined by the owner.
 
-Реализация хранится в `implementation.inline_code` и должна содержать функцию
-с тем же именем, что и `name`:
+## Definition format
+
+The implementation is stored in `implementation.inline_code` and must contain a
+function with the same name as the function's `name`:
 
 ```json
 {
@@ -15,19 +18,25 @@
 }
 ```
 
-Порядок работы:
+## Workflow
 
-1. LLM вызывает `propose_function`.
-2. Функция сохраняется как `draft` и код не запускается.
-3. Владелец нажимает `проверить`.
-4. После успешной проверки владелец нажимает `подтвердить и активировать`.
-5. Только активная Python-функция попадает в tool schemas и может быть вызвана моделью.
-6. При вызове код запускается в отдельном процессе Python.
+1. The LLM calls `propose_function`.
+2. The function is saved as a `draft`, and its code is **not** executed.
+3. The owner clicks **Validate**.
+4. After a successful validation the owner clicks **Confirm and activate**.
+5. Only an **active** Python function appears in the tool schemas and can be
+   invoked by the model.
+6. On invocation, the code runs in a separate Python process.
 
-Ограничения процесса: таймаут по умолчанию 30 секунд (максимум 120), ограничение
-размера stdout 200000 символов (максимум 1000000).
+## Process limits
 
-ВАЖНО: это не полноценный security sandbox. Активированный Python-код получает
-права ОС того пользователя, под которым запущен PAI, и может импортировать
-доступные Python-модули и работать с файлами/сетью. Поэтому `activate` является
-явным разрешением на выполнение кода.
+- Timeout: 30 seconds by default (maximum 120).
+- stdout size cap: 200 000 characters (maximum 1 000 000).
+
+## Security notice (important)
+
+This is **not** a full security sandbox. Enabled Python code runs with the OS
+privileges of the user who runs PAI and can import any available Python module,
+touch the filesystem, and reach the network. Therefore, clicking **activate**
+is an explicit grant of code-execution permission. Only enable functions you
+have reviewed and trust.

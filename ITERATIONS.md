@@ -1,115 +1,110 @@
-# Журнал итераций
+# Iteration log
 
-Одна новая функция за итерацию. Список ниже — история того, что уже добавлено.
+One new feature per iteration. The list below records what has already been added.
 
-## Итерация 1 — Бэкап и восстановление памяти
+## Iteration 1 — Memory backup and restore
 
-- `Storage.export_wal()` / `Storage.import_wal(data, mode)` в `pai/storage.py`.
-- `GET /memory/export` — скачать весь WAL как `.jsonl`-бэкап.
-- `POST /memory/import?mode=merge|replace` — восстановить/влить бэкап;
-  файл полностью валидируется до записи (битый бэкап не трогает хранилище).
-- Тесты: `tests/test_storage.py` (export/import, merge/replace, невалидные
-  файлы), `tests/test_app.py` (эндпоинты, roundtrip через API).
-- `requirements.txt`: добавлен `python-multipart` (нужен FastAPI для
-  загрузки файлов).
-- README: обновлена таблица эндпоинтов, число тестов, добавлен пример curl.
+- `Storage.export_wal()` / `Storage.import_wal(data, mode)` in `pai/storage.py`.
+- `GET /memory/export` — download the whole WAL as a `.jsonl` backup.
+- `POST /memory/import?mode=merge|replace` — restore/merge a backup; the file is
+  fully validated before anything is written (a corrupt backup does not touch
+  the storage).
+- Tests: `tests/test_storage.py` (export/import, merge/replace, invalid files),
+  `tests/test_app.py` (endpoints, roundtrip through the API).
+- `requirements.txt`: added `python-multipart` (FastAPI needs it for file uploads).
+- README: updated the endpoints table, the test count, and added a curl example.
 
-**Статус:** реализовано, 137/137 тестов проходят.
+**Status:** implemented, 137/137 tests pass.
 
-## Итерация 2 — Корректное завершение при исчерпании лимита вызовов инструментов
+## Iteration 2 — Graceful termination when the tool-call limit is exhausted
 
-**Баг:** при длинном диалоге (например, «напиши книгу» → «дай полный текст
-всех глав по одной» → «больше текста») модель уходила в цикл повторных
-`search_archive`/`get_fragment` без результата и, исчерпав
-`MAX_TOOL_ITERATIONS` (6), возвращала пользователю сырую техническую
-строку `[превышен лимит итераций вызова инструментов]` вместо ответа.
+**Bug:** in a long dialogue (for example "write a book" → "give the full text of
+all chapters one by one" → "more text") the model fell into a loop of repeated
+`search_archive`/`get_fragment` calls with no result and, once it exhausted
+`MAX_TOOL_ITERATIONS` (6), returned the raw technical string
+`[tool iteration limit exceeded]` to the user instead of an actual answer.
 
-**Исправление** (`pai/orchestrator.py`):
-- Добавлен `Orchestrator._force_final_answer(messages)` — при исчерпании
-  лимита делается ещё один вызов LLM **без инструментов**
-  (`tools=None`), с явной подсказкой-нуджем сформулировать окончательный
-  ответ на основе уже собранного контекста (или честно сказать, что
-  информация не нашлась, и предложить уточнить запрос).
-- Голый текст-заглушка (`_ITERATION_LIMIT_FALLBACK`) используется только
-  если и этот последний вызов не дал текста (LLM недоступна/вернула
-  пусто) — никогда не пропадает без ответа пользователю.
-- Исправление применено в обоих путях: `_resolve_tool_calls` (обычный
-  `/chat`) и `_resolve_tool_calls_stream` (`/chat/stream`).
-- Тесты: `tests/test_orchestrator.py` — форс-вызов без инструментов после
-  лимита, фолбэк при пустом форс-ответе, фолбэк при ошибке LLM в
-  форс-вызове, тот же сценарий для стримингового пути.
+**Fix** (`pai/orchestrator.py`):
+- Added `Orchestrator._force_final_answer(messages)` — when the limit is reached,
+  one more LLM call is made **without tools** (`tools=None`), with an explicit
+  nudge to formulate a final answer based on the context already gathered (or to
+  honestly say the info was not found and suggest refining the request).
+- The bare placeholder text (`_ITERATION_LIMIT_FALLBACK`) is used only if even
+  that final call produced no text (LLM unavailable / returned empty) — the user
+  is never left without a reply.
+- The fix is applied to both paths: `_resolve_tool_calls` (regular `/chat`) and
+  `_resolve_tool_calls_stream` (`/chat/stream`).
+- Tests: `tests/test_orchestrator.py` — forced no-tools call after the limit,
+  fallback on empty forced answer, fallback on an LLM error in the forced call,
+  and the same scenario for the streaming path.
 
-**Статус:** реализовано, 140/140 тестов проходят.
+**Status:** implemented, 140/140 tests pass.
 
-## Итерация 6 — Инструмент web_search (поиск в интернете)
+## Iteration 6 — web_search tool (internet search)
 
-- Новый инструмент `web_search(query, limit=5)` в `pai/tools.py`: запрос к
-  `html.duckduckgo.com/html/` через stdlib `urllib` (без внешних зависимостей,
-  без API-ключа), парсинг результатов регэкспом (`title`, `url`, `snippet`),
-  разворачивание редиректов DuckDuckGo (`/l/?uddg=...`).
-  - `ToolError` при сетевой ошибке (обрабатывается в диспетчере — возвращает
-    `{"results": [], "error": ...}`, не роняет диалог).
-- Схема добавлена в `TOOL_SCHEMAS`, обработчик `ToolDispatcher._tool_web_search`
-  логирует вызов через `storage.log_retrieval`, как остальные инструменты.
-- Явно НЕ добавлен в дефолтный `Persona.tool_permissions` — инструмент трогает
-  внешний интернет, а не память пользователя, поэтому включается по персоне
-  осознанно (`tool_permissions=[..., "web_search"]`).
-- В описании инструмента для модели явно сказано: не заменяет `get_fragment`/
-  `search_archive`, использовать только для внешних фактов, результаты —
-  сниппеты, а не полный текст страницы.
+- New tool `web_search(query, limit=5)` in `pai/tools.py`: queries
+  `html.duckduckgo.com/html/` via stdlib `urllib` (no external dependencies, no
+  API key), parses results with regex (`title`, `url`, `snippet`), and unwraps
+  DuckDuckGo redirects (`/l/?uddg=...`).
+  - `ToolError` on network failure (handled in the dispatcher — returns
+    `{"results": [], "error": ...}` instead of crashing the dialogue).
+- Schema added to `TOOL_SCHEMAS`; handler `ToolDispatcher._tool_web_search` logs
+  the call through `storage.log_retrieval`, like the other tools.
+- Explicitly **not** added to the default `Persona.tool_permissions` — the tool
+  touches the external internet rather than the user's memory, so it must be
+  enabled per persona deliberately (`tool_permissions=[..., "web_search"]`).
+- The tool's description for the model states explicitly that it does not replace
+  `get_fragment`/`search_archive`, should be used only for external facts, and
+  returns snippets rather than full page text.
 
-**Статус:** реализовано (без тестов по запросу пользователя).
+**Status:** implemented (no tests, per user request).
 
-## Итерация 7 — Изменение tool_permissions у персоны
+## Iteration 7 — Changing a persona's tool_permissions
 
-- `PATCH /personas/{persona_id}/tools` в `pai/app.py`: обновляет
-  `tool_permissions` существующей персоны (например, включить/выключить
-  `web_search` без пересоздания персоны).
+- `PATCH /personas/{persona_id}/tools` in `pai/app.py`: updates the
+  `tool_permissions` of an existing persona (e.g. enable/disable `web_search`
+  without recreating the persona).
 - `PersonaToolsUpdate` (`pai/api_schemas.py`): `{"tool_permissions": [...]}`.
-- Валидация: имена сверяются с реальным списком инструментов
-  (`TOOL_SCHEMAS` из `pai/tools.py`) — неизвестное имя → `422` с списком
-  допустимых. Несуществующая персона → `404`.
-- `persona.updated_at` обновляется при изменении.
+- Validation: names are checked against the real tool list
+  (`TOOL_SCHEMAS` from `pai/tools.py`) — unknown name → `422` with the list of
+  allowed names. Non-existent persona → `404`.
+- `persona.updated_at` is refreshed on change.
 
-**Статус:** реализовано (без тестов по запросу пользователя).
+**Status:** implemented (no tests, per user request).
 
+## Iteration 8 — Pool of independent tool calls
 
-## Итерация 8 — Пул независимых tool calls
+**Bug:** when a single LLM answer contained several `tool_calls`, the orchestrator
+executed them sequentially. This increased latency and, more importantly, did not
+architecturally fix the boundary between planning and result analysis: the next
+LLM request could be made after each individual tool was processed.
 
-**Баг:** если один ответ LLM содержал несколько `tool_calls`, оркестратор
-выполнял их последовательно. Это увеличивало latency и, главное, архитектурно
-не фиксировало границу между планированием и анализом результатов: следующий
-запрос к LLM мог быть сделан после обработки каждого инструмента.
+**Fix** (`pai/orchestrator.py`):
+- All `tool_calls` from a single LLM answer now form one execution pool.
+- Calls run in parallel through a bounded `ThreadPoolExecutor` (up to 8 workers).
+- The orchestrator waits for **all** pool calls to finish.
+- Only after all results arrive is the next single LLM request made.
+- Results are kept in the original `tool_calls` order, so the order of `tool`
+  messages is deterministic.
+- The change applies simultaneously to the regular and the streaming path.
+- An error on one tool is isolated and does not cancel the other pool calls.
 
-**Исправление** (`pai/orchestrator.py`):
-- Все `tool_calls` из одного ответа LLM теперь образуют один execution pool.
-- Вызовы запускаются параллельно через ограниченный `ThreadPoolExecutor`
-  (до 8 workers).
-- Оркестратор ждёт завершения **всех** вызовов пула.
-- Только после получения всех результатов выполняется следующий единый запрос
-  к LLM.
-- Результаты сохраняются в исходном порядке `tool_calls`, поэтому порядок
-  `tool` messages детерминирован.
-- Изменение применено одновременно к обычному и streaming пути.
-- Ошибка одного инструмента изолируется и не отменяет остальные вызовы пула.
+Added test `test_handle_turn_executes_multiple_tools_as_one_pool_before_next_llm_call`.
 
-Добавлен тест `test_handle_turn_executes_multiple_tools_as_one_pool_before_next_llm_call`.
+**Status:** implemented.
 
-**Статус:** реализовано.
+## 2026-09-09 — Planning tool pools
 
+The previous implementation already ran several `tool_calls` from one LLM answer
+as a single execution pool, but if the model returned only one `tool_call`, a new
+LLM request was issued right after it. This did not guarantee pre-planning.
 
-## 2026-09-09 — планирование пулов инструментов
+The protocol is now changed to:
+1. `planning`: the model must produce a `plan_tool_pool`;
+2. `pool execution`: all calls in the chosen pool run in parallel and their
+   results are saved to memory / `action_log`;
+3. `analysis`: the model receives the results of the whole pool and decides
+   whether to run another pool or answer the user now.
 
-Предыдущая реализация уже выполняла несколько `tool_calls` из одного ответа LLM
-одним execution pool, но если модель возвращала только один `tool_call`, после него
-сразу выполнялся новый запрос LLM. Это не гарантировало предварительное планирование.
-
-Теперь протокол изменён на:
-1. `planning`: модель обязана сформировать `plan_tool_pool`;
-2. `pool execution`: все вызовы выбранного пула выполняются параллельно и результаты
-   сохраняются в память/`action_log`;
-3. `analysis`: модель получает результаты всего пула и решает, нужен ли следующий
-   пул или уже можно отвечать пользователю.
-
-`max_tool_iterations` теперь ограничивает число таких циклов, а не количество
-отдельных функций.
+`max_tool_iterations` now limits the number of such cycles, not the number of
+individual functions.

@@ -188,3 +188,29 @@ class NodesMixin:
                 raise KeyError(f"No such node: {node_id}")
             node.status = status
             self.put_node(node, assign_position=False)
+
+    def rename_space(self, old: str, new: str) -> int:
+        """Moves every node of `old` into `new`. Each move is a normal `put`, so the WAL replays it."""
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM nodes WHERE space_id=?", (old,)).fetchall()
+            nodes = [self._row_to_node(r) for r in rows]
+            for node in nodes:
+                node.space_id = new
+                self.put_node(node, assign_position=False)
+            return len(nodes)
+
+    def delete_space(self, space_id: str) -> int:
+        """Deletes every node of a space. Each removal is logged as a `delete` WAL record,
+        so rebuilding the index from the WAL does not bring the nodes back."""
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM nodes WHERE space_id=?", (space_id,)).fetchall()
+            nodes = [self._row_to_node(r) for r in rows]
+            for node in nodes:
+                self._append_wal("delete", node)
+                self._remove_sqlite(node.id)
+            self._conn.commit()
+            return len(nodes)
+
+    def _remove_sqlite(self, node_id: str) -> None:
+        self._conn.execute("DELETE FROM nodes WHERE id=?", (node_id,))
+        self._conn.execute("DELETE FROM nodes_fts WHERE id=?", (node_id,))

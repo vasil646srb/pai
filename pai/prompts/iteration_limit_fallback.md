@@ -1,1 +1,1 @@
-I've reached my tool iteration limit; here is my best answer based on what I know. / Достигнут лимит итераций инструментов; ниже мой лучший ответ на основе имеющихся данных.
+I've reached my tool iteration limit; here is my best answer based on what I know. / The tool-call iteration limit has been reached; below is my best answer based on the information gathered so far.

@@ -50,6 +50,7 @@
     <div class="nav-section-label">Memory Explorer</div>
     <div class="nav-item" data-view="overview"><span class="ico">▸</span>Обзор</div>
     <div class="nav-item" data-view="tree"><span class="ico">▸</span>Дерево / узлы</div>
+    <div class="nav-item" data-view="spaces"><span class="ico">▸</span>Пространства</div>
     <div class="nav-section-label">Управление</div>
     <div class="nav-item" data-view="personas"><span class="ico">▸</span>Персоны</div>
     <div class="nav-item" data-view="skills"><span class="ico">▸</span>Скилы</div>
@@ -112,9 +113,6 @@
         <div id="overviewLevelLegend" style="display:flex; gap:14px; margin-top:10px; flex-wrap:wrap;"></div>
       </div>
 
-      <div class="section-title">Пространства (spaces)</div>
-      <div class="grid grid-4" id="spaceCards"></div>
-
       <div class="section-title">KV-кеш и авто-сжатие</div>
       <div class="card" id="cacheStatusCard">
         <div class="empty-state">Загрузка…</div>
@@ -138,6 +136,13 @@
       <details class="fold" data-fold="overview.retr"><summary class="section-title">Журнал обращений к памяти (retrieval log)</summary>
       <div class="card" id="retrievalLog"><div class="empty-state">Загрузка…</div></div>
       </details>
+    </section>
+
+    <!-- ===================== SPACES ===================== -->
+    <section class="view" id="view-spaces">
+      <h1 class="page-title">Пространства памяти</h1>
+      <p class="page-sub">Отдельные хранилища памяти. Переименование переносит все узлы в новое имя, но не меняет настройки персон и служб (allow_spaces / deny_spaces) — их нужно поправить вручную. Удаление стирает все узлы пространства без возможности восстановления.</p>
+      <div id="spacesList"><div class="empty-state">Загрузка…</div></div>
     </section>
 
     <!-- ===================== TREE / NODE INSPECTOR ===================== -->

@@ -1,24 +1,29 @@
-# СБОРКА 11: Telegram (публичный и приватный канал)
+# BUILD 11: Telegram (public and private channel)
 
-Установка из корня проекта:
+Install from the project root:
     unzip -o laya_integration_v11.zip
     python apply_telegram.py .
     python -m pytest -q tests_laya/test_telegram.py tests_laya/test_telegram_routes.py
 
-Страница «Telegram» (в меню):
-- токен бота: сохраняется в секретах (TELEGRAM_BOT_TOKEN), в интерфейсе показывается только хвост;
-- публичный канал: @username или -100…, режим «подтверждение» (по умолчанию) или «сразу»;
-- приватный канал: режим «сразу» (по умолчанию) или «подтверждение»;
-- «Проверить бота и каналы»: проверяет токен и право публикации у бота в каждом канале;
-- очередь: посты публичного канала (и приватного, если выбрать подтверждение) ждут «Опубликовать» / «Отклонить».
+"Telegram" page (in the menu):
+- bot token: stored in secrets (`TELEGRAM_BOT_TOKEN`), only its tail is shown in
+the UI;
+- public channel: `@username` or `-100…`, with a "confirmation" mode (default) or
+"immediate";
+- private channel: "immediate" mode (default) or "confirmation";
+- "Check bot and channels": verifies the token and the bot's posting permission
+in each channel;
+- queue: posts for the public channel (and the private one, if confirmation is
+selected) wait for "Publish" / "Reject".
 
-Инструмент для модели: telegram_post (channel: public|private, text). Включите его в настройках нужной персоны
-(Персоны → инструменты). Публичный пост модель не публикует сразу: он попадает в очередь.
+Model tool: `telegram_post (channel: public|private, text)`. Enable it in the
+settings of the desired persona (Personas -> tools). A public post is not published
+immediately by the model: it goes into the queue.
 
-Как создать бота и дать права:
-1. В @BotFather: /newbot, сохраните токен.
-2. Добавьте бота админом в оба канала, право «Публиковать сообщения».
-3. Публичный канал: укажите @username. Приватный: его числовой id (обычно -100…), узнать можно через бота
-   или через «Проверить», если id уже известен.
+How to create a bot and grant permissions:
+1. In @BotFather: /newbot, save the token.
+2. Add the bot as admin to both channels, with the "Post messages" right.
+3. Public channel: provide @username. Private channel: its numeric id (usually
+   -100…), discoverable via the bot or via "Check" if the id is already known.
 
-Env: PAI_TELEGRAM_API — базовый URL Bot API (по умолчанию https://api.telegram.org).
+Env: `PAI_TELEGRAM_API` — base Bot API URL (default https://api.telegram.org).

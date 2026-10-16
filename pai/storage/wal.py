@@ -87,7 +87,10 @@ class WalMixin:
                         node = MemoryNode.from_dict(record["node"])
                     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                         continue  # torn/corrupt line (e.g. crash mid-write): skip, keep the rest
-                    self._upsert_sqlite(node)
+                    if record.get("op") == "delete":
+                        self._remove_sqlite(node.id)
+                    else:
+                        self._upsert_sqlite(node)
             self._conn.commit()
             self._next_position = self._compute_next_position()
             return self.count_nodes()

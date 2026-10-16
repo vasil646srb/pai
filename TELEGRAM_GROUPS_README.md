@@ -1,24 +1,33 @@
-# СБОРКА 12: Telegram — группа и новые сообщения
+# BUILD 12: Telegram — group and new messages
 
-Установка из корня проекта (сборка 11 должна быть применена; повторный запуск безопасен):
+Install from the project root (build 11 must be applied; re-running is safe):
     unzip -o laya_integration_v12.zip
-    python apply_telegram.py .            # уже применено — пропустится
+    python apply_telegram.py .            # already applied — will be skipped
     python apply_telegram_groups.py .
-    python -m pytest -q tests_laya        # 13 тестов
+    python -m pytest -q tests_laya        # 13 tests
 
-Что добавлено:
-- Группа как третий канал: chat_id, режим публикаций (подтверждение по умолчанию), чтение включено.
-- Чтение: getUpdates. Фоновый опрос раз в 60 с (PAI_TELEGRAM_POLL_SEC, 0 = выкл), кнопка «Проверить новые сообщения».
-  Сообщения хранятся в telegram_inbox.json, offset — в telegram_state.json. Повторный опрос дублей не даёт.
-- Инструмент telegram_read (channel: all|group|public|private): возвращает непрочитанные и помечает их прочитанными.
-- telegram_post принимает channel = group (публикация в группу через очередь подтверждения).
+What was added:
+- A group as a third channel: chat_id, publishing mode (confirmation by default),
+  reading enabled.
+- Reading: `getUpdates`. Background polling every 60 s (`PAI_TELEGRAM_POLL_SEC`,
+  0 = off), plus a "Check new messages" button. Messages are stored in
+  `telegram_inbox.json`, the offset in `telegram_state.json`. Re-polling never
+duplicates.
+- Tool `telegram_read (channel: all|group|public|private)`: returns unread
+  messages and marks them as read.
+- `telegram_post` now accepts `channel = group` (publication to the group through
+the confirmation queue).
 
-Важно про группу:
-- По умолчанию бот в группе видит только команды, упоминания и ответы на его сообщения.
-  Чтобы видеть все сообщения: @BotFather → /setprivacy → Disable, затем удалите бота из группы и добавьте снова.
-- Для чтения канала (public/private) бот должен быть админом канала. Для приватного канала chat_id
-  можно узнать через getUpdates (бот получает channel_post после добавления админом).
-- Вебхук должен быть выключен (deleteWebhook), иначе getUpdates вернёт ошибку конфликта.
+Important notes on the group:
+- By default a bot in a group only sees commands, mentions, and replies to its own
+  messages. To see all messages: @BotFather → /setprivacy → Disable, then remove
+the bot from the group and add it again.
+- To read a channel (public/private) the bot must be the channel admin. For a
+  private channel the chat_id can be obtained via getUpdates (the bot receives a
+  channel_post after being added as admin).
+- The webhook must be disabled (deleteWebhook), otherwise getUpdates returns a
+  conflict error.
 
-Как пользоваться: спросите ассистента «есть новое в группе?» — он вызовет telegram_read.
-Ответить в группу: ассистент ставит пост в очередь группы, вы подтверждаете на странице Telegram.
+How to use: ask the assistant "anything new in the group?" — it will call
+`telegram_read`. To reply in the group, the assistant puts the post into the group
+queue and you confirm it on the Telegram page.

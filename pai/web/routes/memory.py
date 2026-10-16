@@ -11,6 +11,7 @@ from ...api_schemas import (
     NodeOut,
     NodeStatusUpdate,
     SearchRequest,
+    SpaceRename,
 )
 from ...models import (
     NodeStatus,
@@ -139,3 +140,37 @@ def register(app: FastAPI) -> None:
         except ValueError as e:
             raise HTTPException(400, f"Invalid backup file: {e}") from e
         return {"mode": mode, "nodes_in_index": count}
+
+    @app.get("/memory/spaces/manage")
+    def manage_spaces(storage: Storage = Depends(get_storage), personas: PersonaRegistry = Depends(get_personas)):
+        """Spaces with their node counts and the personas whose allow_spaces include them."""
+        counts = storage.stats()["by_space"]
+        all_personas = personas.all()
+        names = set(counts) | {"personal"}
+        for p in all_personas:
+            names.update(p.memory_filter.allow_spaces)
+        return [
+            {
+                "space_id": name,
+                "nodes": counts.get(name, 0),
+                "personas": [p.persona_id for p in all_personas if name in p.memory_filter.allow_spaces],
+            }
+            for name in sorted(n for n in names if n)
+        ]
+
+    @app.patch("/memory/spaces/{space_id}")
+    def rename_space(space_id: str, req: SpaceRename, storage: Storage = Depends(get_storage)):
+        new_name = req.new_name.strip()
+        if not new_name or len(new_name) > 64 or "/" in new_name or new_name == space_id:
+            raise HTTPException(400, "Некорректное имя пространства")
+        moved = storage.rename_space(space_id, new_name)
+        if moved == 0:
+            raise HTTPException(404, f"Пространство «{space_id}» не содержит узлов")
+        return {"from": space_id, "to": new_name, "nodes_moved": moved}
+
+    @app.delete("/memory/spaces/{space_id}")
+    def delete_space(space_id: str, confirm: str = Query(...), storage: Storage = Depends(get_storage)):
+        if confirm != space_id:
+            raise HTTPException(400, "Подтверждение не совпадает с именем пространства")
+        removed = storage.delete_space(space_id)
+        return {"space_id": space_id, "nodes_deleted": removed}

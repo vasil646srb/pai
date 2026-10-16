@@ -1,16 +1,19 @@
-# СБОРКА 10: модели по задачам
+# BUILD 10: models per task
 
-Из корня проекта:
+From the project root:
     unzip -o laya_integration_v10.zip
     python apply_roles.py .
-    python -m pytest -q tests_laya/test_roles.py     (нужны: пакет pai, fastapi, httpx)
+    python -m pytest -q tests_laya/test_roles.py     (needs: the pai package, fastapi, httpx)
 
-Что делает:
-- Новое поле «Модель для планирования пула» в Настройках -> LLM (пусто = основная модель).
-- Вызовы фаз planning и analysis (выбор инструментов и разбор результатов) идут на эту модель.
-- Финальный ответ (final) остаётся на основной модели.
-- Суммаризация и проверка ответа — свои модели, как раньше (summarizer_model, verify_model).
-- Значение сохраняется в llm_config.json и применяется при старте и при сохранении без перезапуска.
+What it does:
+- New field "Pool planning model" in Settings -> LLM (empty = the main model).
+- The `planning` and `analysis` phase calls (tool selection and result parsing)
+  run on this model.
+- The final answer (`final`) stays on the main model.
+- Summarization and answer verification keep their own models, as before
+  (`summarizer_model`, `verify_model`).
+- The value is stored in `llm_config.json` and applied at startup and on save
+  without restart.
 
-Проверка в работе: в «Логе действий» у строк llm_request поле модели должно совпадать с ролью
-(planning/analysis -> planner_model, финальный -> model).
+Verification at runtime: in the "Action log", the model field of the `llm_request`
+rows must match the role (planning/analysis -> planner_model, final -> model).

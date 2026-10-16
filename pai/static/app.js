@@ -177,6 +177,7 @@ function switchView(name, { persist = true } = {}) {
   });
   if (persist) localStorage.setItem(LS_KEY_VIEW, name);
   if (name === "overview") loadOverview();
+  if (name === "spaces") loadSpaces();
   loadSpaceSelects();
   if (name === "tree") loadTreeRoots();
   if (name === "personas") { loadPersonas(); populateCreatePersonaSelects(); }
@@ -1514,7 +1515,6 @@ document.getElementById("chatSpace").addEventListener("change", (e) => {
 
 async function loadOverview() {
   const statCards = document.getElementById("statCards");
-  const spaceCards = document.getElementById("spaceCards");
   const logEl = document.getElementById("retrievalLog");
   statCards.innerHTML = `<div class="card stat-card"><div class="stat-label">загрузка…</div></div>`;
   loadCacheStatus();
@@ -1539,10 +1539,6 @@ async function loadOverview() {
       <span class="tag lvl ${lvlClass(l)}"><span style="display:inline-block;width:6px;height:6px;border-radius:2px;background:${levelColor(l)};margin-right:5px;"></span>level ${l}: ${stats.by_level[l]}</span>
     `).join("") || `<span class="tag">пусто</span>`;
 
-    const spaces = Object.entries(stats.by_space || {});
-    spaceCards.innerHTML = spaces.length ? spaces.map(([sp, n]) => `
-      <div class="card stat-card"><div class="stat-label">${esc(sp)}</div><div class="stat-value">${n}</div></div>
-    `).join("") : `<div class="empty-state">Пространства ещё не заполнены</div>`;
 
     refreshHeaderStack();
   } catch (e) {
@@ -3259,3 +3255,57 @@ function foldsInit() {
 }
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", foldsInit);
 else foldsInit();
+
+
+/* ===================== SPACES ===================== */
+
+async function loadSpaces() {
+  const list = document.getElementById("spacesList");
+  list.innerHTML = `<div class="empty-state">Загрузка…</div>`;
+  try {
+    const spaces = await api("/memory/spaces/manage");
+    if (!spaces.length) {
+      list.innerHTML = `<div class="empty-state">Пространств пока нет</div>`;
+      return;
+    }
+    list.innerHTML = `<div class="grid grid-4">` + spaces.map((s) => `
+      <div class="card stat-card">
+        <div class="stat-label">${esc(s.space_id)}</div>
+        <div class="stat-value">${s.nodes}</div>
+        <div class="page-sub tight">персоны: ${s.personas.length ? s.personas.map(esc).join(", ") : "—"}</div>
+        <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
+          <button class="btn sm" data-act="rename" data-space="${esc(s.space_id)}">Переименовать</button>
+          <button class="btn sm" data-act="delete" data-space="${esc(s.space_id)}" style="color:var(--danger);">Удалить</button>
+        </div>
+      </div>`).join("") + `</div>`;
+  } catch (e) {
+    list.innerHTML = `<div class="empty-state">Ошибка загрузки: ${esc(e.message)}</div>`;
+  }
+}
+
+document.getElementById("spacesList").addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("button[data-act]");
+  if (!btn) return;
+  const from = btn.dataset.space;
+  const enc = encodeURIComponent(from);
+  try {
+    if (btn.dataset.act === "rename") {
+      const to = (prompt(`Новое имя для пространства «${from}»:`, from) || "").trim();
+      if (!to || to === from) return;
+      const r = await api(`/memory/spaces/${enc}`, { method: "PATCH", body: { new_name: to } });
+      toast(`Перенесено узлов: ${r.nodes_moved}`, "ok");
+    } else {
+      const typed = (prompt(`Все узлы пространства «${from}» будут стёрты без восстановления.\nЧтобы подтвердить, введите его имя:`) || "").trim();
+      if (typed !== from) {
+        if (typed) toast("Имя не совпало, удаление отменено", "err");
+        return;
+      }
+      const r = await api(`/memory/spaces/${enc}?confirm=${enc}`, { method: "DELETE" });
+      toast(`Удалено узлов: ${r.nodes_deleted}`, "ok");
+    }
+    loadSpaces();
+    loadSpaceSelects();
+  } catch (e) {
+    toast("Ошибка: " + e.message, "err");
+  }
+});

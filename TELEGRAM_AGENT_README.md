@@ -1,27 +1,35 @@
-# СБОРКА 13: Telegram — фоновые ответы в группе (Jev + персона brain)
+# BUILD 13: Telegram — background replies in a group (Jev + the brain persona)
 
-Установка из корня проекта (сборки 11 и 12 должны быть применены):
+Install from the project root (builds 11 and 12 must be applied):
     unzip -o laya_integration_v13.zip
     python apply_telegram_agent.py .
     python -m pytest -q tests_laya
 
-Как работает в фоне (каждые PAI_TELEGRAM_POLL_SEC секунд, по умолчанию 60):
-1. getUpdates — новые сообщения группы и каналов для чтения, без дублей.
-2. Jev классифицирует каждое новое сообщение: нужен ли ответ (да/нет, порог 0.6) и вид (вопрос, просьба, болтовня, спам).
-3. Если ответ нужен: персона brain (отдельное пространство telegram-group) пишет текст, он ставится в очередь группы.
-   В режиме группы «подтверждение» вы нажимаете «Опубликовать». В режиме «сразу» уходит сам.
-4. Спам, сообщения ботов и сообщения, на которые ответ не нужен, пропускаются. Сообщение обрабатывается один раз.
+How it works in the background (every `PAI_TELEGRAM_POLL_SEC` seconds, default 60):
+1. `getUpdates` — new messages from the group and the channels being read,
+   without duplicates.
+2. Jev classifies each new message: whether a reply is needed (yes/no, threshold
+   0.6) and its type (question, request, chatter, spam).
+3. If a reply is needed: the `brain` persona (a separate `telegram-group` space)
+   writes the text, which is put into the group queue. In the group's
+   "confirmation" mode you press "Publish". In "immediate" mode it goes out on
+   its own.
+4. Spam, bot messages, and messages that need no reply are skipped. Each message
+   is processed once.
 
-Нужно: интеграция Laya/Jev (сборки Laya, PAI_DECISION_PROVIDER=jev и ключ). Без неё классификация
-возвращает «недоступно», сообщение повторяется 3 раза и помечается, ответов не будет.
+Requirements: the Laya/Jev integration (Laya builds, `PAI_DECISION_PROVIDER=jev`
+and a key). Without it, classification returns "unavailable", the message is
+retried 3 times and flagged, and no replies are produced.
 
-Страница Telegram:
-- «Отвечать в группе автоматически» — выключатель автоответов.
-- «Обработать сейчас» — прогнать очередь новых сообщений вручную.
-- «Написать в канал или группу» — ручная отправка: приватный уходит сразу, публичный и группа — через подтверждение.
+Telegram page:
+- "Reply in the group automatically" — the auto-reply toggle.
+- "Process now" — manually run the queue of new messages.
+- "Write to a channel or group" — manual sending: private goes immediately,
+  public and group go through confirmation.
 
-Примеры отправки:
-- В чате: «опубликуй в публичный канал: …» — ассистент вызывает telegram_post, пост ждёт подтверждения.
-- В чате: «запиши себе в приватный канал: …» — уходит сразу.
-- На странице: форма «Написать в канал или группу».
-- Программно (локально): POST /telegram/send с телом {"channel": "private", "text": "…"}.
+Sending examples:
+- In chat: "publish to the public channel: …" — the assistant calls
+  `telegram_post`, the post awaits confirmation.
+- In chat: "note this to your private channel: …" — goes immediately.
+- On the page: the "Write to a channel or group" form.
+- Programmatically (local): `POST /telegram/send` with body `{"channel": "private", "text": "…"}`.
