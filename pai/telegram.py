@@ -4,7 +4,7 @@
   private — default mode 'auto': the post is sent at once (only the owner and the assistant read it).
 
 The bot token lives in the secret store (name TELEGRAM_BOT_TOKEN), never in settings files or logs.
-Settings: <data_dir>/telegram_settings.json. Queue: <data_dir>/telegram_queue.json.
+Settings: <data_dir>/telegram_settings.json. Messages, queue, actions and offset: SQLite tables (telegram_store.py).
 Env: PAI_TELEGRAM_API overrides the API base (tests use a fake server).
 """
 from __future__ import annotations
@@ -14,12 +14,15 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import threading
 import time
 import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
+
+from .telegram_store import TelegramStore, file_links
 
 # Markdown -> Telegram HTML and message splitting (see md_to_tg_html).
 
@@ -56,6 +59,7 @@ POLICY_DEFAULTS = {
     "group_spaces": [],               # extra spaces the group persona may READ (its own group space is always on)
     "jev_min_confidence": 0.6,        # Jev threshold for "needs a reply": higher = stricter
     "jev_reply_kinds": ["question", "request", "chat", "other"],
+    "group_image_replies": True,      # a group message that is only an image goes to the persona without the Jev gate
 }
 GROUP_TOOL_OPTIONS = ("get_fragment", "search_archive", "calculate_time_delta",
                       "list_fragments_by_timeframe", "web_search", "web_fetch")
@@ -75,14 +79,23 @@ class HeldReply(Exception):
 
 
 class TelegramService:
-    def __init__(self, data_dir, secrets, api_base: str = ""):
+    def __init__(self, data_dir, secrets, api_base: str = "", storage=None):
         self.dir = Path(data_dir)
         self.secrets = secrets
         self.api_base = (api_base or os.environ.get("PAI_TELEGRAM_API") or "https://api.telegram.org").rstrip("/")
-        self._lock = threading.Lock()
         self._poll_lock = threading.Lock()
         self._group_lock = threading.Lock()  # background poller and the "process now" button must not answer twice
         self._owner_lock = threading.Lock()
+        if storage is not None:  # the memory store's own connection and lock: one database, one writer at a time
+            self._lock = storage._lock
+            conn = storage._conn
+        else:
+            self.dir.mkdir(parents=True, exist_ok=True)
+            self._lock = threading.RLock()
+            conn = sqlite3.connect(str(self.dir / "index.sqlite3"), check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+        self.store = TelegramStore(conn, self._lock)
+        self.store.import_legacy(self.dir)  # JSON files of the previous version: copied once, then renamed
 
     # ---------- settings ----------
     @property
@@ -142,6 +155,8 @@ class TelegramService:
             if len(spaces) > MAX_POLICY_SPACES:
                 raise TelegramError(f"пространств памяти не больше {MAX_POLICY_SPACES}")
             new["group_spaces"] = list(dict.fromkeys(spaces))
+        if "group_image_replies" in body:
+            new["group_image_replies"] = bool(body["group_image_replies"])
         if "jev_min_confidence" in body:
             try:
                 v = float(body["jev_min_confidence"])
@@ -166,6 +181,19 @@ class TelegramService:
         doc["policy"] = new
         self.dir.mkdir(parents=True, exist_ok=True)
         self._settings_path.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+
+    def enabled(self) -> bool:
+        return bool(self._settings_doc().get("enabled", True))
+
+    def set_enabled(self, value: bool) -> None:
+        doc = self._settings_doc()
+        doc["enabled"] = bool(value)
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self._settings_path.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+
+    def _ensure_enabled(self) -> None:
+        if not self.enabled():
+            raise TelegramError("Telegram выключен: включите его на странице Telegram")
 
     def auto_reply_enabled(self) -> bool:
         return bool(self._settings_doc().get("group_auto_reply", True))
@@ -210,6 +238,7 @@ class TelegramService:
             "token_set": bool(tok),
             "token_preview": f"{'*' * max(0, len(tok) - 4)}{tok[-4:]}" if tok else "",
             "channels": self.channels(),
+            "enabled": self.enabled(),
             "group_auto_reply": self.auto_reply_enabled(),
             "policy": self.policy(),
             "api_base": self.api_base,
@@ -264,35 +293,7 @@ class TelegramService:
             out["channels"].append(row)
         return out
 
-    # ---------- inbox (incoming messages from groups and reading channels) ----------
-    @property
-    def _inbox_path(self) -> Path:
-        return self.dir / "telegram_inbox.json"
-
-    @property
-    def _state_path(self) -> Path:
-        return self.dir / "telegram_state.json"
-
-    def _load_inbox(self) -> list[dict]:
-        try:
-            d = json.loads(self._inbox_path.read_text(encoding="utf-8"))
-            return d if isinstance(d, list) else []
-        except (OSError, ValueError):
-            return []
-
-    def _save_inbox(self, items: list[dict]) -> None:
-        self.dir.mkdir(parents=True, exist_ok=True)
-        self._inbox_path.write_text(json.dumps(items[-INBOX_KEEP:], ensure_ascii=False), encoding="utf-8")
-
-    def _offset(self) -> int:
-        try:
-            return int(json.loads(self._state_path.read_text(encoding="utf-8")).get("offset", 0))
-        except (OSError, ValueError, TypeError):
-            return 0
-
-    def _set_offset(self, n: int) -> None:
-        self._state_path.write_text(json.dumps({"offset": n}), encoding="utf-8")
-
+    # ---------- inbox (incoming messages from groups, reading channels and the owner) ----------
     def _match_channel(self, chat: dict) -> dict | None:
         cid = str(chat.get("id", ""))
         uname = f"@{chat['username']}" if chat.get("username") else ""
@@ -301,8 +302,25 @@ class TelegramService:
                 return c
         return None
 
+    def _offset(self) -> int:
+        try:
+            return int(self.store.get_state("offset") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _set_offset(self, n: int) -> None:
+        self.store.set_state("offset", str(n))
+
+    def _save_analysis(self, it: dict) -> None:
+        """Persist the analysis fields of a group message (its verdict, tries, reply, error)."""
+        fields = {k: it[k] for k in ANALYSIS_KEYS if k in it and not (it[k] is None and k in ("error", "analyzed", "tries"))}
+        self.store.msg_update(it["id"], **fields)
+
     def poll(self) -> dict:
-        """Fetch new updates from Telegram and keep messages of configured read-enabled chats. Idempotent."""
+        """Fetch new updates from Telegram and keep messages of configured read-enabled chats and the owner's
+        private messages. Idempotent: a message is stored once, its id is the primary key."""
+        if not self.enabled():  # updates wait on Telegram's side until Telegram is enabled again
+            return {"new": 0, "fetched": 0, "reason": "Telegram выключен"}
         with self._poll_lock:
             off = self._offset()
             owner_id = self.policy()["owner_id"]
@@ -315,56 +333,49 @@ class TelegramService:
             if not updates:
                 return {"new": 0, "fetched": 0}
             last = off
-            with self._lock:
-                inbox = self._load_inbox()
-                seen = {i["id"] for i in inbox}
-                new = 0
-                for u in updates:
-                    last = max(last, int(u.get("update_id", 0)))
-                    if u.get("callback_query"):
-                        callbacks.append(u["callback_query"])
+            new = 0
+            for u in updates:
+                last = max(last, int(u.get("update_id", 0)))
+                if u.get("callback_query"):
+                    callbacks.append(u["callback_query"])
+                    continue
+                msg = u.get("message") or u.get("channel_post")
+                if not msg:
+                    continue
+                chat = msg.get("chat", {})
+                if msg.get("rich_message"):
+                    _log.info("telegram rich_message shape: %s", json.dumps(_shape(msg["rich_message"]), ensure_ascii=False))
+                item_id = f"{chat.get('id')}:{msg.get('message_id')}"
+                if chat.get("type") == "private":
+                    sender_id = (msg.get("from") or {}).get("id")
+                    if not sender_id:
                         continue
-                    msg = u.get("message") or u.get("channel_post")
-                    if not msg:
-                        continue
-                    chat = msg.get("chat", {})
-                    if chat.get("type") == "private":
-                        sender_id = (msg.get("from") or {}).get("id")
-                        if not sender_id:
-                            continue
-                        if not owner_id:
-                            pairing.append(sender_id)  # no owner yet: tell the sender their id, store nothing
-                        elif sender_id == owner_id:
-                            item_id = f"{chat.get('id')}:{msg.get('message_id')}"
-                            if item_id not in seen:
-                                sender = msg.get("from") or {}
-                                inbox.append({
-                                    "id": item_id, "channel": "owner", "chat_title": "",
-                                    "from": sender.get("username") or sender.get("first_name") or "",
-                                    "text": (msg.get("text") or "")[:2000], "date": msg.get("date"),
-                                    "read": False, "bot": False, "chat_id": chat.get("id"),
-                                })
-                                seen.add(item_id)
-                                new += 1
-                        continue
-                    ch = self._match_channel(chat)
-                    if ch is None:
-                        continue
-                    item_id = f"{chat.get('id')}:{msg.get('message_id')}"
-                    if item_id in seen:
-                        continue
-                    sender = msg.get("from") or msg.get("sender_chat") or {}
-                    inbox.append({
-                        "id": item_id, "channel": ch["key"],
-                        "chat_title": chat.get("title") or ch["title"],
-                        "from": sender.get("username") or sender.get("first_name") or sender.get("title") or "",
-                        "text": (msg.get("text") or msg.get("caption") or "")[:2000],
-                        "date": msg.get("date"), "read": False, "bot": bool(sender.get("is_bot")),
-                    })
-                    seen.add(item_id)
+                    if not owner_id:
+                        pairing.append(sender_id)  # no owner yet: tell the sender their id, store nothing
+                    elif sender_id == owner_id:
+                        sender = msg.get("from") or {}
+                        if self.store.msg_insert({
+                            "id": item_id, "channel": "owner", "chat_title": "",
+                            "from": sender.get("username") or sender.get("first_name") or "",
+                            "text": _msg_text(msg), "date": msg.get("date"), "read": False, "bot": False,
+                            "chat_id": chat.get("id"), "forward": _forward_info(msg), "files": _media_refs(msg),
+                            "kinds": _content_kinds(msg), "media_group": str(msg.get("media_group_id") or ""),
+                        }):
+                            new += 1
+                    continue
+                ch = self._match_channel(chat)
+                if ch is None:
+                    continue
+                sender = msg.get("from") or msg.get("sender_chat") or {}
+                if self.store.msg_insert({
+                    "id": item_id, "channel": ch["key"], "chat_title": chat.get("title") or ch["title"],
+                    "from": sender.get("username") or sender.get("first_name") or sender.get("title") or "",
+                    "text": (_msg_text(msg) or "")[:2000], "date": msg.get("date"), "read": False,
+                    "bot": bool(sender.get("is_bot")), "chat_id": chat.get("id"), "files": _media_refs(msg),
+                    "kinds": _content_kinds(msg),
+                }):
                     new += 1
-                self._save_inbox(inbox)
-            self._set_offset(last)  # after the inbox is saved: a crash re-reads and dedupes by id
+            self._set_offset(last)  # after the rows are written: a crash re-reads and the id dedupes
             for cq in callbacks:
                 try:
                     self._on_callback(cq)
@@ -383,6 +394,8 @@ class TelegramService:
         and the text goes through the group channel (queue or auto, per channel mode). Each message is handled once."""
         if _responder is None:
             return {"processed": 0, "reason": "агент не подключён"}
+        if not self.enabled():
+            return {"processed": 0, "reason": "Telegram выключен"}
         if not self.auto_reply_enabled():
             return {"processed": 0, "reason": "автоответы выключены"}
         if not self._group_lock.acquire(blocking=False):
@@ -393,69 +406,78 @@ class TelegramService:
             self._group_lock.release()
 
     def _process_group(self, limit: int) -> dict:
-        with self._lock:
-            items = self._load_inbox()
-        todo = [i for i in items if i.get("channel") == "group" and not i.get("analyzed") and not i.get("bot")][:limit]
+        todo = self.store.msg_group_todo(limit)
         pol = self.policy()
-        handled = 0
         max_age = _max_age()
-        for it in todo:
-            if max_age and it.get("date") and time.time() - int(it["date"]) > max_age:
-                it["analyzed"], it["verdict"] = True, "stale"  # old backlog: never answer it late
-                continue
-            self._react(it["id"], REACT_PROCESSING)
-            if _classifier is not None:
-                try:
-                    verdict = _classifier(it.get("text", ""), it.get("from", ""))
-                except Exception:
-                    _log.warning("telegram classifier failed", exc_info=True)
-                    verdict = None
-                if verdict is None:  # Jev unavailable: retry on the next cycle, give up after 3 tries
-                    it["tries"] = it.get("tries", 0) + 1
-                    if it["tries"] >= 3:
-                        it["analyzed"], it["verdict"] = True, "unavailable"
-                        self._react(it["id"], None)
-                    continue
-            else:
-                verdict = {"needs_reply": True, "kind": "unknown"}
-            it["verdict"], it["needs_reply"], it["analyzed"] = verdict["kind"], verdict["needs_reply"], True
-            handled += 1
-            if (verdict["kind"] == "spam" or not verdict["needs_reply"]
-                    or (verdict["kind"] != "unknown" and verdict["kind"] not in pol["jev_reply_kinds"])):
-                self._react(it["id"], None)
-                continue
-            final = None
-            try:
-                reply = _responder(it)
-                if reply:
-                    reply = shorten(reply, self.text_limit("group"))
-                    r = self.submit("group", reply, verified=True, reply_to=_source_message_id(it))
-                    it["reply"] = {"status": r.get("status"), "id": r.get("id"), "error": r.get("error", "")}
-                    final = REACT_DONE
-            except HeldReply as h:
-                it["held"], it["draft"] = str(h), h.draft
-                final = REACT_HELD
-            except TelegramError as e:
-                it["error"] = str(e)
-            except Exception as e:
-                _log.exception("telegram responder failed")
-                it["error"] = f"{type(e).__name__}"
-            self._react(it["id"], final)
-        with self._lock:  # re-read: telegram_read may have marked items read meanwhile; copy only analysis fields
-            byid = {i["id"]: i for i in todo}
-            fresh = self._load_inbox()
-            for f in fresh:
-                src = byid.get(f["id"])
-                if src is not None:
-                    f.update({k: src[k] for k in ANALYSIS_KEYS if k in src})
-            self._save_inbox(fresh)
+        handled = sum(self._group_one(it, pol, max_age) for it in todo)
         return {"processed": handled, "checked": len(todo)}
+
+    def _group_one(self, it: dict, pol: dict, max_age: int) -> int:
+        """One group message. Returns 1 if Jev judged it (counts as processed), 0 otherwise."""
+        if max_age and it.get("date") and time.time() - int(it["date"]) > max_age:
+            it["analyzed"], it["verdict"] = True, "stale"  # old backlog: never answer it late
+            self._save_analysis(it)
+            return 0
+        self._react(it["id"], REACT_PROCESSING)
+        # A message that is only an image: Jev reads text, so it cannot judge a picture. The persona sees the
+        # image itself and answers with nothing when no answer is due (see make_responder).
+        image_only = not (it.get("text") or "").strip() and any(_is_image_ref(f) for f in it.get("files") or [])
+        if image_only and pol.get("group_image_replies", True):
+            verdict = {"needs_reply": True, "kind": "request"}
+        elif _classifier is not None:
+            try:
+                verdict = _classifier(_group_input_text(it), it.get("from", ""))
+            except Exception:
+                _log.warning("telegram classifier failed", exc_info=True)
+                verdict = None
+            if verdict is None:  # Jev unavailable: retry on the next cycle, give up after 3 tries
+                it["tries"] = it.get("tries", 0) + 1
+                if it["tries"] >= 3:
+                    it["analyzed"], it["verdict"] = True, "unavailable"
+                    self._react(it["id"], None)
+                self._save_analysis(it)
+                return 0
+        else:
+            verdict = {"needs_reply": True, "kind": "unknown"}
+        it["verdict"], it["needs_reply"], it["analyzed"] = verdict["kind"], verdict["needs_reply"], True
+        self._save_analysis(it)
+        if (verdict["kind"] == "spam" or not verdict["needs_reply"]
+                or (verdict["kind"] != "unknown" and verdict["kind"] not in pol["jev_reply_kinds"])):
+            self._react(it["id"], None)
+            return 1
+        # Images of the group member go to the model only now, when Jev has said that an answer is needed.
+        imgs = [f for f in it.get("files") or [] if _is_image_ref(f)]
+        it["attachments"] = self.download_media(imgs) if imgs else []
+        for a in it["attachments"]:
+            if a.get("data") is not None and len(a["data"]) > GROUP_IMAGE_MAX_BYTES:
+                a["data"], a["note"] = None, "слишком большое изображение для модели"
+        final = None
+        try:
+            reply = _responder(it)
+            if reply:
+                reply = shorten(reply, self.text_limit("group"))
+                r = self.submit("group", reply, verified=True, reply_to=_source_message_id(it))
+                it["reply"] = {"status": r.get("status"), "id": r.get("id"), "error": r.get("error", "")}
+                final = REACT_DONE
+        except HeldReply as h:
+            it["held"], it["draft"] = str(h), h.draft
+            final = REACT_HELD
+        except TelegramError as e:
+            it["error"] = str(e)
+        except Exception as e:
+            _log.exception("telegram responder failed")
+            it["error"] = f"{type(e).__name__}"
+        self._react(it["id"], final)
+        self._save_analysis(it)
+        return 1
 
     def process_owner(self, limit: int = 3) -> dict:
         """Owner's private messages are commands: the owner's responder runs them and the answer goes back
         to the owner's private chat. Not behind the approval queue: the owner is the one who asked."""
         if _owner_responder is None:
             return {"processed": 0, "reason": "агент не подключён"}
+        if not self.enabled():
+            return {"processed": 0, "reason": "Telegram выключен"}
         pol = self.policy()
         if not pol["owner_commands"] or not pol["owner_id"]:
             return {"processed": 0, "reason": "команды владельца выключены"}
@@ -468,46 +490,83 @@ class TelegramService:
 
     def _process_owner(self, limit: int, owner_id: int) -> dict:
         with self._lock:
-            items = self._load_inbox()
-            revising = next((i for i in self._load_queue()
-                             if i.get("status") == "pending" and i.get("revise")), None)
-        todo = [i for i in items if i.get("channel") == "owner" and not i.get("analyzed")][:limit]
-        for it in todo:
-            it["analyzed"] = True
-            self._react(it["id"], REACT_PROCESSING)
-            prompt = it
+            revising = self.store.post_pending_revision()
+        batches = _owner_batches(self.store.msg_owner_todo(), limit)
+        todo = [m for b in batches for m in b]
+        for m in todo:  # marked before the work: a crash never answers the same message twice
+            self.store.msg_update(m["id"], analyzed=True)
+        for batch in batches:
+            texts, prompt_atts, pairs = [], [], []
+            for m in batch:
+                t = _owner_text(m)
+                if t:
+                    texts.append(t)
+                atts = self.download_media(m["files"]) if m.get("files") else []
+                if m.get("files"):
+                    self.store.msg_update(m["id"], files=file_links(atts))  # links are kept even if the reply fails
+                prompt_atts += atts
+                pairs.append((m, atts))
+            prompt = {"text": "\n\n".join(texts), "attachments": prompt_atts}
+            if not prompt["text"] and not prompt_atts:
+                continue  # nothing to act on (sticker, service message)
+            for m in batch:
+                self._react(m["id"], REACT_PROCESSING)
             if revising is not None:
-                prompt = dict(it, text=(
+                prompt["text"] = (
                     f"Владелец просит переделать пост для канала «{revising['channel']}».\n"
                     f"Текущий черновик:\n---\n{revising['text']}\n---\n"
-                    f"Правка владельца: {it.get('text', '')}\n\n"
+                    f"Правка владельца: {prompt['text']}\n\n"
                     f"Верни новую версию текста и сразу вызови telegram_post с channel={revising['channel']}. "
-                    "Не публикуй напрямую: черновик уйдёт владельцу на подтверждение."))
+                    "Не публикуй напрямую: черновик уйдёт владельцу на подтверждение.")
             try:
                 reply = _owner_responder(prompt) or "(готово, текстового ответа нет)"
             except Exception as e:
                 _log.exception("owner command failed")
                 reply = f"ошибка выполнения: {type(e).__name__}"
+            status, err = "sent", ""
             try:
                 for part in split_text(reply, self.text_limit("owner")):
-                    self._send(str(owner_id), part, reply_to=_source_message_id(it))
-                it["reply_status"] = "sent"
+                    self._send(str(owner_id), part, reply_to=_source_message_id(batch[0]))
             except TelegramError as e:
-                it["reply_status"], it["error"] = "failed", str(e)
-            self._react(it["id"], REACT_DONE if it.get("reply_status") == "sent" else None)
-        with self._lock:
-            byid = {i["id"]: i for i in todo}
-            fresh = self._load_inbox()
-            for f in fresh:
-                src = byid.get(f["id"])
-                if src is not None:
-                    f.update({k: src[k] for k in ("analyzed", "reply_status", "error") if k in src})
-            self._save_inbox(fresh)
-        return {"processed": len(todo), "checked": len(todo)}
+                status, err = "failed", str(e)
+            for m, atts in pairs:  # the responder has filled upload_id in each attachment
+                self.store.msg_update(m["id"], files=file_links(atts), reply_status=status, error=err)
+                self._react(m["id"], REACT_DONE if status == "sent" else None)
+        return {"processed": len(batches), "checked": len(todo)}
+
+    def download_media(self, refs: list[dict]) -> list[dict]:
+        """Files of one owner message from Telegram: {name, kind, mime, data (bytes | None), note}.
+        A file that cannot be fetched stays in the list with data=None and the reason in note."""
+        out = []
+        for ref in refs:
+            row = {"file_id": ref["file_id"], "name": ref["name"], "kind": ref["kind"], "mime": ref["mime"],
+                   "size": int(ref.get("size") or 0), "data": None, "note": ""}
+            if int(ref.get("size") or 0) > MAX_DOWNLOAD_BYTES:
+                row["note"] = "больше 20 МБ, Telegram не отдаёт такие файлы боту"
+            else:
+                try:
+                    info = self._call("getFile", {"file_id": ref["file_id"]}) or {}
+                    if not info.get("file_path"):
+                        raise TelegramError("getFile: нет пути к файлу")
+                    row["data"] = self._fetch_file(info["file_path"])
+                except TelegramError as e:
+                    row["note"] = str(e)
+            out.append(row)
+        return out
+
+    def _fetch_file(self, file_path: str) -> bytes:
+        tok = self.token()
+        try:
+            with urllib.request.urlopen(f"{self.api_base}/file/bot{tok}/{file_path}", timeout=60) as r:
+                data = r.read(MAX_DOWNLOAD_BYTES + 1)
+        except Exception as e:  # the URL contains the token: never echo it
+            raise TelegramError(f"скачивание файла: сеть или таймаут ({type(e).__name__})")
+        if len(data) > MAX_DOWNLOAD_BYTES:
+            raise TelegramError("файл больше 20 МБ")
+        return data
 
     def inbox_view(self) -> dict:
-        items = self._load_inbox()
-        return {"unread": sum(1 for i in items if not i.get("read")), "recent": items[-30:][::-1]}
+        return {"unread": self.store.msg_unread_count(), "recent": self.store.msg_recent(30)}
 
     def read_new(self, channel: str = "all", limit: int = 50) -> dict:
         """Return unread messages (after a fresh poll) and mark them read."""
@@ -516,16 +575,8 @@ class TelegramService:
             self.poll()
         except TelegramError as e:
             note = f"не удалось проверить Telegram сейчас: {e}"
-        with self._lock:
-            items = self._load_inbox()
-            picked = [i for i in items if not i.get("read") and i.get("channel") != "owner"
-                      and (channel == "all" or i.get("channel") == channel)]
-            picked = picked[:limit]
-            ids = {i["id"] for i in picked}
-            for i in items:
-                if i["id"] in ids:
-                    i["read"] = True
-            self._save_inbox(items)
+        picked = self.store.msg_unread(channel, limit)
+        self.store.msg_mark_read([i["id"] for i in picked])
         return {"count": len(picked), "messages": [
             {"channel": i["channel"], "from": i["from"], "text": i["text"], "date": i["date"]} for i in picked],
             "note": note}
@@ -554,25 +605,12 @@ class TelegramService:
             res = self._call("sendMessage", {**base, "text": text})  # markup rejected: send the raw text
         return int(res.get("message_id", 0))
 
-    # ---------- queue ----------
-    @property
-    def _queue_path(self) -> Path:
-        return self.dir / "telegram_queue.json"
 
-    def _load_queue(self) -> list[dict]:
-        try:
-            d = json.loads(self._queue_path.read_text(encoding="utf-8"))
-            return d if isinstance(d, list) else []
-        except (OSError, ValueError):
-            return []
-
-    def _save_queue(self, items: list[dict]) -> None:
-        self.dir.mkdir(parents=True, exist_ok=True)
-        self._queue_path.write_text(json.dumps(items[-QUEUE_KEEP:], ensure_ascii=False), encoding="utf-8")
-
+    # ---------- queue (posts waiting for approval) ----------
     def submit(self, key: str, text: str, verified: bool = False, reply_to: int | None = None) -> dict:
         """verified=True only for text that passed the answer check (background replies, owner's own text).
         Unverified text (from the model via the tool) never goes out at once in public or group channels."""
+        self._ensure_enabled()
         text = (text or "").strip()
         if not text:
             raise TelegramError("пустой текст")
@@ -587,10 +625,7 @@ class TelegramService:
                 "reply_to": reply_to}
         if mode == "auto":
             return self._publish(item, ch)
-        with self._lock:
-            items = self._load_queue()
-            items.append(item)
-            self._save_queue(items)
+        self.store.post_save(item, new=True)
         if key == "public" or (key == "group" and mode == "approve"):
             self._offer(item)
         return {"id": item["id"], "status": "pending",
@@ -602,12 +637,7 @@ class TelegramService:
         owner_id = self.policy()["owner_id"]
         if not owner_id:
             return
-        with self._lock:
-            items = self._load_queue()
-            for old in items:
-                if old.get("status") == "pending" and old.get("revise") and old.get("id") != item["id"]:
-                    old["status"], old["revise"] = "superseded", False
-            self._save_queue(items)
+        self.store.post_supersede_revisions(item["id"])
         iid = item["id"]
         markup = {"inline_keyboard": [
             [{"text": "✅ Опубликовать", "callback_data": f"pub:{iid}"},
@@ -626,15 +656,10 @@ class TelegramService:
         self._update_item(iid, draft_msg_id=mid)
 
     def _update_item(self, item_id: str, **fields) -> None:
-        with self._lock:
-            items = self._load_queue()
-            for i in items:
-                if i.get("id") == item_id:
-                    i.update(fields)
-            self._save_queue(items)
+        self.store.post_update(item_id, **fields)
 
     def _pending_item(self, item_id: str) -> dict:
-        item = next((i for i in self._load_queue() if i.get("id") == item_id), None)
+        item = self.store.post_get(item_id)
         if item is None or item.get("status") != "pending":
             raise TelegramError("уже обработано или не найдено")
         return item
@@ -692,32 +717,14 @@ class TelegramService:
         except TelegramError as e:
             self._answer_cb(cq_id, str(e))
 
+
     # ---------- confirmations of bot actions (owner presses buttons) ----------
-    @property
-    def _actions_path(self) -> Path:
-        return self.dir / "telegram_actions.json"
-
-    def _load_actions(self) -> list[dict]:
-        try:
-            d = json.loads(self._actions_path.read_text(encoding="utf-8"))
-            return d if isinstance(d, list) else []
-        except (OSError, ValueError):
-            return []
-
-    def _save_actions(self, items: list[dict]) -> None:
-        self.dir.mkdir(parents=True, exist_ok=True)
-        self._actions_path.write_text(json.dumps(items[-QUEUE_KEEP:], ensure_ascii=False), encoding="utf-8")
-
     def _set_action(self, item_id: str, **fields) -> None:
-        with self._lock:
-            acts = self._load_actions()
-            for a in acts:
-                if a.get("id") == item_id:
-                    a.update(fields)
-            self._save_actions(acts)
+        self.store.act_update(item_id, **fields)
 
     def request_action(self, question: str, tool: str, arguments: dict) -> dict:
         """The bot asks the owner to confirm one tool call. Nothing runs until the owner presses confirm."""
+        self._ensure_enabled()
         if tool not in CONFIRMABLE_TOOLS:
             raise TelegramError(f"инструмент {tool} нельзя запускать по подтверждению")
         if not isinstance(arguments, dict):
@@ -731,10 +738,7 @@ class TelegramService:
         iid = uuid.uuid4().hex[:10]
         item = {"id": iid, "status": "pending", "question": question, "tool": tool,
                 "arguments": arguments, "created": time.time(), "message_id": None}
-        with self._lock:
-            acts = self._load_actions()
-            acts.append(item)
-            self._save_actions(acts)
+        self.store.act_insert(item)
         details = json.dumps(arguments, ensure_ascii=False)[:800]
         text = f"Нужно подтверждение:\n\n{question}\n\nДействие: {tool}\n{details}"
         markup = {"inline_keyboard": [[
@@ -752,16 +756,13 @@ class TelegramService:
 
     def _run_action(self, item_id: str, cq_id: str, chat_id: str, mid) -> None:
         with self._lock:
-            acts = self._load_actions()
-            item = next((a for a in acts if a.get("id") == item_id), None)
+            item = self.store.act_get(item_id)
             if item is None or item.get("status") != "pending":
                 raise TelegramError("уже обработано или не найдено")
             if time.time() - float(item.get("created", 0)) > ACTION_TTL:
-                item["status"] = "expired"
-                self._save_actions(acts)
+                self._set_action(item_id, status="expired")
                 raise TelegramError("запрос устарел")
-            item["status"] = "running"  # a second press must not run it twice
-            self._save_actions(acts)
+            self._set_action(item_id, status="running")  # a second press must not run it twice
         try:
             result = _action_executor(item["tool"], item["arguments"])
             ok = not (isinstance(result, dict) and result.get("tool_failed"))
@@ -770,18 +771,16 @@ class TelegramService:
             result, ok = {"tool_failed": True, "error": str(e)}, False
         self._set_action(item_id, status="done" if ok else "failed")
         summary = json.dumps(result, ensure_ascii=False, default=str)[:1500]
-        note = (("✅ Выполнено" if ok else "❌ Не выполнено") + f": {item['question']}\n\n{summary}")
+        note = ("✅ Выполнено" if ok else "❌ Не выполнено") + f": {item['question']}\n\n{summary}"
         self._answer_cb(cq_id, "Выполнено" if ok else "Ошибка")
         self._edit_status(chat_id, mid, note)
 
     def _reject_action(self, item_id: str, cq_id: str, chat_id: str, mid) -> None:
         with self._lock:
-            acts = self._load_actions()
-            item = next((a for a in acts if a.get("id") == item_id), None)
+            item = self.store.act_get(item_id)
             if item is None or item.get("status") != "pending":
                 raise TelegramError("уже обработано или не найдено")
-            item["status"] = "rejected"
-            self._save_actions(acts)
+            self._set_action(item_id, status="rejected")
         self._answer_cb(cq_id, "Отменено")
         self._edit_status(chat_id, mid, f"❌ Отменено: {item['question']}")
 
@@ -791,28 +790,22 @@ class TelegramService:
             item["status"], item["sent"] = "sent", time.time()
         except TelegramError as e:
             item["status"], item["error"] = "failed", str(e)
-        with self._lock:
-            items = [i for i in self._load_queue() if i.get("id") != item["id"]] + [item]
-            self._save_queue(items)
+        self.store.post_save(item)
         return {"id": item["id"], "status": item["status"], "message_id": item["message_id"], "error": item["error"]}
 
     def queue_view(self) -> dict:
-        items = self._load_queue()
-        return {"pending": [i for i in items if i.get("status") == "pending"],
-                "history": [i for i in items if i.get("status") != "pending"][-30:][::-1]}
+        return {"pending": self.store.post_pending(), "history": self.store.post_history(30)}
 
     def _act(self, item_id: str, approve: bool) -> dict:
-        with self._lock:
-            items = self._load_queue()
-        item = next((i for i in items if i.get("id") == item_id), None)
+        item = self.store.post_get(item_id)
         if item is None or item.get("status") != "pending":
             raise TelegramError("запись не найдена или уже обработана")
         if not approve:
             item["status"] = "rejected"
-            with self._lock:
-                self._save_queue([i for i in self._load_queue() if i.get("id") != item_id] + [item])
+            self.store.post_save(item)
             return item
         return self._publish(item, self._channel(item["channel"]))
+
 
 
 import html as _html
@@ -965,6 +958,221 @@ def _max_age() -> int:
         return 600
 
 
+MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024  # Bot API getFile limit
+IMAGE_MIMES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})  # what vision models accept
+GROUP_IMAGE_MAX_BYTES = 5 * 1024 * 1024  # strangers' images above this are not sent to the model
+
+
+def _is_image_ref(f: dict) -> bool:
+    return f.get("kind") == "photo" or f.get("mime") in IMAGE_MIMES
+
+
+def _group_input_text(it: dict) -> str:
+    """What Jev and the persona see of a group message: its text, or a note when the message is only a file."""
+    text = (it.get("text") or "").strip()
+    if text:
+        return text
+    kinds = [k for k in (it.get("kinds") or []) if k != "rich_message"]
+    if it.get("files"):
+        names = {"photo": "фото", "document": "файл", "audio": "аудио", "voice": "голосовое",
+                 "video": "видео", "video_note": "видеосообщение", "animation": "анимация"}
+        return "(сообщение без текста: " + ", ".join(names.get(f.get("kind"), "файл") for f in it["files"]) + ")"
+    return f"(сообщение без текста{': ' + ', '.join(kinds) if kinds else ''})"
+
+
+def _entity_name(obj) -> str:
+    if not isinstance(obj, dict):
+        return ""
+    if obj.get("title"):
+        return obj["title"]
+    full = " ".join(x for x in (obj.get("first_name"), obj.get("last_name")) if x)
+    if obj.get("username"):
+        return f"{full} (@{obj['username']})" if full else f"@{obj['username']}"
+    return full
+
+
+def _forward_info(msg: dict) -> dict | None:
+    """Who wrote a forwarded message and where it came from. Bot API 7+ forward_origin, else the older forward_* fields."""
+    origin = msg.get("forward_origin")
+    if isinstance(origin, dict):
+        kind, date = origin.get("type"), origin.get("date")
+        if kind == "user":
+            return {"from": _entity_name(origin.get("sender_user")), "source": "", "date": date}
+        if kind == "hidden_user":
+            return {"from": origin.get("sender_user_name", ""), "source": "", "date": date}
+        if kind == "chat":
+            return {"from": origin.get("author_signature", ""), "source": _entity_name(origin.get("sender_chat")), "date": date}
+        if kind == "channel":
+            return {"from": origin.get("author_signature", ""), "source": _entity_name(origin.get("chat")), "date": date}
+    if msg.get("forward_from") or msg.get("forward_from_chat") or msg.get("forward_sender_name"):
+        return {
+            "from": _entity_name(msg.get("forward_from")) or msg.get("forward_sender_name", "") or msg.get("forward_signature", ""),
+            "source": _entity_name(msg.get("forward_from_chat")),
+            "date": msg.get("forward_date"),
+        }
+    return None
+
+
+def _media_refs(msg: dict) -> list[dict]:
+    """Files of one message, including those nested in rich_message blocks. Duplicates (same file) are dropped."""
+    refs = _direct_media(msg)
+    if isinstance(msg.get("rich_message"), (dict, list)):
+        refs += _direct_media_tree(msg["rich_message"])
+    out, seen = [], set()
+    for r in refs:
+        if r["file_id"] not in seen:
+            seen.add(r["file_id"])
+            out.append(r)
+    return out
+
+
+def _direct_media_tree(node) -> list[dict]:
+    """Walk a nested structure (rich_message blocks) and collect files at every level."""
+    refs: list[dict] = []
+    if isinstance(node, dict):
+        refs += _direct_media(node)
+        for v in node.values():
+            refs += _direct_media_tree(v)
+    elif isinstance(node, list):
+        for x in node:
+            refs += _direct_media_tree(x)
+    return refs
+
+
+def _direct_media(msg: dict) -> list[dict]:
+    """Files at this level: photo (largest size), document, audio, voice, video, video note, animation."""
+    refs = []
+    if isinstance(msg.get("photo"), list) and msg["photo"]:
+        best = max(msg["photo"], key=lambda p: (p.get("file_size") or 0, p.get("width", 0) * p.get("height", 0)))
+        refs.append({"file_id": best["file_id"], "kind": "photo",
+                     "name": f"photo_{best.get('file_unique_id', best['file_id'][:12])}.jpg",
+                     "mime": "image/jpeg", "size": best.get("file_size") or 0})
+    for key, default_name, default_mime in (
+        ("document", "", ""), ("audio", "", ""), ("voice", "voice.ogg", "audio/ogg"),
+        ("video", "video.mp4", "video/mp4"), ("video_note", "video_note.mp4", "video/mp4"),
+        ("animation", "animation.mp4", "video/mp4"),
+    ):
+        obj = msg.get(key)
+        if not isinstance(obj, dict) or not obj.get("file_id"):
+            continue
+        refs.append({"file_id": obj["file_id"], "kind": key,
+                     "name": obj.get("file_name") or default_name or f"{key}_{obj.get('file_unique_id', '')}",
+                     "mime": obj.get("mime_type") or default_mime, "size": obj.get("file_size") or 0})
+    return refs
+
+
+_MSG_META = frozenset({
+    "message_id", "from", "sender_chat", "chat", "date", "edit_date", "forward_origin", "forward_from",
+    "forward_from_chat", "forward_from_message_id", "forward_signature", "forward_sender_name", "forward_date",
+    "is_automatic_forward", "is_topic_message", "message_thread_id", "reply_to_message", "external_reply",
+    "quote", "reply_markup", "has_protected_content", "media_group_id", "author_signature", "entities",
+    "caption_entities", "link_preview_options", "via_bot", "sender_boost_count", "effect_id",
+    "business_connection_id", "sender_business_bot", "is_from_offline", "show_caption_above_media",
+    "has_media_spoiler", "text", "caption",
+})
+
+
+def _content_kinds(msg: dict) -> list[str]:
+    """Names of the content fields of a message (photo, poll, contact, ...): shown to the model when there is no text."""
+    return sorted(k for k in msg if k not in _MSG_META)
+
+
+_TEXT_KEYS = ("text", "caption", "alternative_text")
+
+
+def _rich_text(node) -> list[str]:
+    """Readable strings of a rich_message tree: text/caption/alternative_text at any depth, in order."""
+    out: list[str] = []
+    if isinstance(node, dict):
+        if isinstance(node.get("content"), list):  # a paragraph: its segments are one line of text
+            joined = "".join(_rich_text(node["content"]))
+            if joined:
+                out.append(joined)
+        for k, v in node.items():
+            if k == "content" and isinstance(v, list):
+                continue
+            if k in _TEXT_KEYS and isinstance(v, str):
+                if v:
+                    out.append(v)
+            else:
+                out += _rich_text(v)
+    elif isinstance(node, list):
+        for x in node:
+            out += _rich_text(x)
+    return out
+
+
+def _shape(node, depth: int = 0):
+    """Key skeleton without values (no ids, no text): for logs when a payload is unfamiliar."""
+    if depth > 6:
+        return "…"
+    if isinstance(node, dict):
+        return {k: _shape(v, depth + 1) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_shape(node[0], depth + 1)] if node else []
+    return type(node).__name__
+
+
+def _msg_text(msg: dict) -> str:
+    """Text of a message: its text or caption, the text of rich_message blocks, or the readable text of a poll, contact, venue or location."""
+    if msg.get("text") or msg.get("caption"):
+        return msg.get("text") or msg.get("caption")
+    if msg.get("rich_message"):
+        rich = "\n".join(t.strip() for t in _rich_text(msg["rich_message"]) if t.strip())
+        if rich:
+            return rich
+    if isinstance(msg.get("poll"), dict):
+        p = msg["poll"]
+        opts = "\n".join(f"- {o.get('text', '')}" for o in p.get("options", []) if isinstance(o, dict))
+        return f"Опрос: {p.get('question', '')}\n{opts}".strip()
+    if isinstance(msg.get("contact"), dict):
+        c = msg["contact"]
+        name = " ".join(x for x in (c.get("first_name"), c.get("last_name")) if x)
+        return f"Контакт: {name} {c.get('phone_number', '')}".strip()
+    if isinstance(msg.get("venue"), dict):
+        v = msg["venue"]
+        return f"Место: {v.get('title', '')}, {v.get('address', '')}".strip(", ")
+    if isinstance(msg.get("location"), dict):
+        loc = msg["location"]
+        return f"Геолокация: {loc.get('latitude')}, {loc.get('longitude')}"
+    return ""
+
+
+def _forward_header(f: dict) -> str:
+    who = f.get("from") or "неизвестный автор"
+    src = f" из «{f['source']}»" if f.get("source") else ""
+    when = f", {time.strftime('%Y-%m-%d %H:%M', time.localtime(int(f['date'])))}" if f.get("date") else ""
+    return f"[Переслано от {who}{src}{when}]"
+
+
+def _owner_text(m: dict) -> str:
+    body = (m.get("text") or "").strip()
+    if m.get("forward"):
+        if not body:  # Telegram sent no text: say so, so the model does not answer as if it saw one
+            kinds = ", ".join(m.get("kinds") or []) or "неизвестный тип"
+            body = f"(в пересланном сообщении нет текста; содержимое: {kinds})"
+        body = f"{_forward_header(m['forward'])}\n{body}".strip()
+    return body
+
+
+def _owner_batches(items: list[dict], limit: int) -> list[list[dict]]:
+    """Unanswered owner messages, one batch each. Messages of one album (media_group_id) form one batch."""
+    batches: list[list[dict]] = []
+    albums: dict[str, list[dict]] = {}
+    for it in items:
+        if it.get("channel") != "owner" or it.get("analyzed"):
+            continue
+        g = str(it.get("media_group") or "")
+        if g:
+            if g not in albums:
+                albums[g] = []
+                batches.append(albums[g])
+            albums[g].append(it)
+        else:
+            batches.append([it])
+    return batches[:limit]
+
+
 def _source_message_id(item: dict) -> int | None:
     """Inbox ids are '<chat_id>:<message_id>'."""
     try:
@@ -988,10 +1196,10 @@ def _poll_loop(interval: int) -> None:
             _log.exception("telegram poll crashed")
 
 
-def init_services(secrets, data_dir) -> TelegramService:
+def init_services(secrets, data_dir, storage=None) -> TelegramService:
     """Creates the service and, once per process, a background poller (PAI_TELEGRAM_POLL_SEC, default 60, 0 = off)."""
     global _svc, _poller_started
-    _svc = TelegramService(data_dir, secrets)
+    _svc = TelegramService(data_dir, secrets, storage=storage)
     try:
         interval = int(os.environ.get("PAI_TELEGRAM_POLL_SEC", "15"))
     except ValueError:

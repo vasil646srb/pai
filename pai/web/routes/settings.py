@@ -23,7 +23,7 @@ def register(app: FastAPI) -> None:
         _orch0.planner_llm = build_planner_llm_client(app.state.llm_config_store.load())
     from ...telegram import TelegramError, get_services, init_services
 
-    init_services(app.state.secret_store, app.state.llm_config_store.path.parent)
+    init_services(app.state.secret_store, app.state.llm_config_store.path.parent, storage=app.state.storage)
 
     from ...telegram import send_manual, set_classifier, set_options_source, set_owner_responder, set_responder
     from ...telegram_agent import GROUP_SPACE, classify, group_persona, make_owner_responder, make_responder
@@ -79,6 +79,8 @@ def register(app: FastAPI) -> None:
                 s.set_token(str(body["token"]))
             if isinstance(body.get("channels"), list):
                 s.save_channels(body["channels"])
+            if "enabled" in body:
+                s.set_enabled(bool(body["enabled"]))
             if "group_auto_reply" in body:
                 s.set_auto_reply(bool(body["group_auto_reply"]))
             if isinstance(body.get("policy"), dict):

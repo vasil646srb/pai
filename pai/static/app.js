@@ -972,6 +972,7 @@ function tgFill(d) {
   document.getElementById("tgGroupChat").value = grp.chat_id || "";
   document.getElementById("tgGroupMode").value = grp.mode || "approve";
   document.getElementById("tgAutoReply").checked = !!d.group_auto_reply;
+  document.getElementById("tgEnabled").checked = d.enabled !== false;
   const p = d.policy || {};
   document.getElementById("tgOwnerId").value = p.owner_id || "";
   document.getElementById("tgOwnerCommands").checked = !!p.owner_commands;
@@ -1016,6 +1017,13 @@ async function tgLoad() {
     tgOptions = await api("/telegram/options");
     tgFill(await api("/telegram/settings"));
   } catch (e) { document.getElementById("tgStatus").textContent = "ошибка: " + e.message; }
+}
+async function tgSetEnabled(ev) {
+  const st = document.getElementById("tgStatus"), box = ev.target;
+  try {
+    const d = await api("/telegram/settings", { method: "PUT", body: { enabled: box.checked } });
+    tgFill(d); st.textContent = box.checked ? "Telegram включён" : "Telegram выключен";
+  } catch (e) { box.checked = !box.checked; st.textContent = "не сохранено: " + e.message; }
 }
 async function tgSave() {
   const st = document.getElementById("tgStatus");
@@ -1114,6 +1122,7 @@ function tgInit() {
   document.getElementById("tgSave").dataset.bound = "1";
   document.getElementById("tgSave").addEventListener("click", tgSave);
   document.getElementById("tgCheck").addEventListener("click", tgCheck);
+  document.getElementById("tgEnabled").addEventListener("change", tgSetEnabled);
   document.getElementById("tgQueueRefresh").addEventListener("click", tgQueueLoad);
   document.getElementById("tgQueue").addEventListener("click", tgQueueAct);
   document.getElementById("tgPoll").addEventListener("click", tgPollNow);

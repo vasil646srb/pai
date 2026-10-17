@@ -43,10 +43,11 @@ class FilesMixin:
     def _file_path(self, sha: str, codec: str) -> Path:
         return self.data_dir / "files" / sha[:2] / f"{sha}{_EXT.get(codec, '.bin')}"
 
-    def store_upload(self, name: str, data: bytes, space_id: str = "personal") -> dict:
+    def store_upload(self, name: str, data: bytes, space_id: str = "personal", any_type: bool = False) -> dict:
+        """any_type: keep files of any type (Telegram attachments). Text is extracted only where it is readable."""
         name = clean_name(name)
         ext = os.path.splitext(name)[1].lower()
-        if ext not in ALLOWED_EXTS:
+        if not any_type and ext not in ALLOWED_EXTS:
             raise ValueError(f"Тип файла не поддерживается: {ext or 'без расширения'}")
         if not data:
             raise ValueError("Пустой файл")
