@@ -14,6 +14,7 @@ class ChatRequest(BaseModel):
     reference_now: str | None = None
     images: list[str] = Field(default_factory=list)
     file_ids: list[str] = Field(default_factory=list)
+    turn_id: str | None = Field(default=None, max_length=64)  # lets /chat/stop cancel this turn
 
 
 class ToolTraceItem(BaseModel):
@@ -87,7 +88,7 @@ class PersonaCreate(BaseModel):
     allow_tags: list[str] = Field(default_factory=list)
     deny_tags: list[str] = Field(default_factory=list)
     tool_permissions: list[str] = Field(
-        default_factory=lambda: ["get_fragment", "search_archive", "calculate_time_delta", "web_search", "web_fetch"]
+        default_factory=lambda: ["get_fragment", "search_archive", "calculate_time_delta", "web_search", "web_fetch", "wikipedia_search", "pubmed_search", "image_search"]
     )
     tone: str = "neutral"
 

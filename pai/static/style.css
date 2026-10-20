@@ -1511,3 +1511,37 @@ img, svg, video, canvas { max-width: 100%; height: auto; }
 .fold-item > summary { justify-content: flex-start; }
 .fold-item > summary > .fold-preview { flex: 1 1 200px; font-size: 13px; }
 .tg-check { display: inline-flex; gap: 4px; margin: 4px 12px 4px 0; font-size: 13px; align-items: center; }
+
+.req-panel { margin: 0 12px 8px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); display: flex; flex-direction: column; gap: 8px; }
+.req-panel[hidden] { display: none; }
+.req-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.req-form { display: flex; gap: 8px; align-items: flex-end; }
+.req-form textarea { flex: 1; background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius-sm); padding: 8px 10px; font-size: 13px; resize: vertical; min-height: 40px; outline: none; }
+.req-list { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
+.req-item { border: 1px solid var(--border-soft); border-radius: var(--radius-sm); padding: 8px 10px; background: var(--surface); }
+.req-item.done { opacity: .55; }
+.req-text { white-space: pre-wrap; font-size: 13px; }
+.req-meta { font-size: 11px; color: var(--muted, var(--text)); margin-top: 4px; }
+.req-actions { display: flex; gap: 6px; margin-top: 6px; }
+
+#btnStop[hidden] { display: none; }
+
+.img-gallery { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.img-card { margin: 0; flex: 0 1 160px; min-width: 0; }
+.img-card a { display: block; }
+.img-card img { width: 100%; height: 120px; object-fit: cover; border-radius: 8px; display: block; background: var(--surface-2); }
+.img-card figcaption { font-size: 11px; opacity: .7; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- mobile composer: textarea on its own row, buttons below ---------- */
+@media (max-width: 620px) {
+  .chat-input-row { flex-wrap: wrap; gap: 6px; padding: 8px 8px calc(8px + env(safe-area-inset-bottom, 0px)); }
+  .chat-input-col { flex: 1 1 100%; order: -1; min-width: 0; }
+  .chat-input-row textarea { font-size: 16px; min-height: 42px; max-height: 120px; }  /* 16px stops iOS zoom-on-focus */
+  .chat-attach-btn { width: 40px; height: 40px; }
+  #btnSend, #btnStop { flex: 1 1 0; min-width: 0; height: 40px; padding: 0 10px; white-space: nowrap; }
+  #btnStop[hidden] { display: none; }
+}
+@media (max-width: 380px) {
+  #btnSend, #btnStop { font-size: 13px; }
+  .chat-attach-btn { width: 36px; height: 36px; }
+}

@@ -27,7 +27,7 @@ INTERNAL_PERSONA_IDS = frozenset({"telegram_group"})
 
 BRAIN_DEFAULT_TOOLS = [
     "get_fragment", "search_archive", "calculate_time_delta",
-    "list_fragments_by_timeframe", "web_search", "web_fetch",
+    "list_fragments_by_timeframe", "web_search", "web_fetch", "wikipedia_search", "pubmed_search", "image_search",
     "http_request", "shell_exec", "ask_confirmation",
 ]
 
@@ -145,7 +145,7 @@ def _builtin_new_personas() -> list[Persona]:
             active_skill_ids=[],
             memory_filter=MemoryFilter(),
             tool_permissions=[
-                "get_fragment", "search_archive", "calculate_time_delta", "web_search", "web_fetch",
+                "get_fragment", "search_archive", "calculate_time_delta", "web_search", "web_fetch", "wikipedia_search", "pubmed_search", "image_search",
             ],
             tone="neutral, clear",
         ),
@@ -159,7 +159,7 @@ def _builtin_new_personas() -> list[Persona]:
             system_core_addon=load_prompt("addons/guest"),
             active_skill_ids=[],
             memory_filter=MemoryFilter(allow_spaces=["guest", "shared"], deny_tags=["diary"]),
-            tool_permissions=["get_fragment", "search_archive", "web_search", "web_fetch"],
+            tool_permissions=["get_fragment", "search_archive", "web_search", "web_fetch", "wikipedia_search", "pubmed_search", "image_search"],
             tone="friendly, brief",
         ),
     ]

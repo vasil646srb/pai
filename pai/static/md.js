@@ -33,6 +33,7 @@ function renderMarkdown(src) {
   };
   const inline = (s) => s
     .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/!\[([^\]"<>]{0,200})\]\((https:\/\/upload\.wikimedia\.org\/[^\s"'<>()]+)\)/g, '<img src="$2" alt="$1" loading="lazy" referrerpolicy="no-referrer" style="max-width:100%;border-radius:8px"/>')
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "<em>$1</em>")
     .replace(/\[([^\]]+)\]\(((?:https?:\/\/)[^)\s"'<>]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');

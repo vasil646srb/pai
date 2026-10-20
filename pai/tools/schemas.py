@@ -84,6 +84,52 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "wikipedia_search",
+            "description": "Search Wikipedia articles. Returns {title, url, snippet}. Good for definitions and background facts. Use web_fetch on the url for the full article.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "default": 5},
+                    "lang": {"type": "string", "default": "ru", "description": "Wikipedia language code, e.g. ru, en, de."},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "pubmed_search",
+            "description": "Search PubMed biomedical literature. Returns {title, url, snippet} with authors, journal and date in snippet. For the abstract, use web_fetch on the url.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "English keywords work best, e.g. 'metformin aging mice'."},
+                    "limit": {"type": "integer", "default": 5},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "image_search",
+            "description": "Search freely licensed images on Wikimedia Commons. Returns {title, markdown, image_url, page_url, license, author}. To show a picture, copy the 'markdown' field of a result verbatim on its own line (it embeds image_url). Never use page_url as an image: it is a web page. Cite license and author if asked.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "default": 5},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "web_fetch",
             "description": (
                 "Follow a link (e.g. from web_search results) and get the "
@@ -391,7 +437,7 @@ TOOL_SCHEMAS.append({
 })
 
 
-BRAIN_ONLY_TOOLS = frozenset({"list_personas", "get_persona", "create_persona", "edit_persona"})
+BRAIN_ONLY_TOOLS = frozenset({"list_personas", "get_persona", "create_persona", "edit_persona", "send_file_to_owner"})
 
 
 BRAIN_PERSONA_ID = "brain"
@@ -454,3 +500,20 @@ TOOL_PLAN_SCHEMA = {
         },
     },
 }
+
+TOOL_SCHEMAS.append({
+    "type": "function",
+    "function": {
+        "name": "send_file_to_owner",
+        "description": ("Send a picture or a file to the owner's private Telegram chat. Use kind='photo' for pictures "
+                        "and kind='document' for any file. Give either url (an https link on upload.wikimedia.org, "
+                        "e.g. the image_url of an image_search result) or upload_id (a file already stored, e.g. one "
+                        "the owner sent). Photos are sent as images; documents keep the original file name."),
+        "parameters": {"type": "object", "properties": {
+            "kind": {"type": "string", "enum": ["photo", "document"]},
+            "url": {"type": "string", "description": "https link on upload.wikimedia.org."},
+            "upload_id": {"type": "string", "description": "Id of a stored file."},
+            "caption": {"type": "string", "description": "Optional caption, up to 1000 characters."},
+        }, "required": ["kind"]},
+    },
+})

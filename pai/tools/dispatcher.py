@@ -9,6 +9,7 @@ from .memory import MemoryToolsMixin
 from .persona import PersonaToolsMixin
 from .proposals import ProposalToolsMixin
 from .schemas import BRAIN_ONLY_TOOLS, BRAIN_PERSONA_ID, TOOL_SCHEMAS
+from .sources import SourcesToolsMixin
 from .shell import ShellToolsMixin
 
 # Personas that may never change rules or functions, even though propose_* tools are otherwise always granted.
@@ -22,7 +23,7 @@ from .web import WebToolsMixin
 _log = logging.getLogger(__name__)
 
 
-class ToolDispatcher(PersonaToolsMixin, ProposalToolsMixin, MemoryToolsMixin, WebToolsMixin, ShellToolsMixin):
+class ToolDispatcher(PersonaToolsMixin, ProposalToolsMixin, MemoryToolsMixin, WebToolsMixin, SourcesToolsMixin, ShellToolsMixin):
     """Routes tool calls to the mixins that implement them."""
 
     def __init__(
@@ -85,6 +86,15 @@ class ToolDispatcher(PersonaToolsMixin, ProposalToolsMixin, MemoryToolsMixin, We
         except TelegramError as e:
             return {"tool_failed": True, "tool": "ask_confirmation",
                     "error": f"подтверждение в Telegram недоступно: {e}. Спроси подтверждение прямо в этом чате и жди ответа."}
+
+    def _tool_send_file_to_owner(self, arguments, persona):
+        from ..telegram import TelegramError, send_file_from_tool
+        try:
+            return send_file_from_tool(
+                str(arguments.get("kind", "")), url=str(arguments.get("url", "") or ""),
+                upload_id=str(arguments.get("upload_id", "") or ""), caption=str(arguments.get("caption", "") or ""))
+        except TelegramError as e:
+            return {"tool_failed": True, "error": str(e), "tool": "send_file_to_owner"}
 
     def _tool_telegram_read(self, arguments, persona):
         from ..telegram import TelegramError, read_from_tool

@@ -103,6 +103,15 @@ CREATE TABLE IF NOT EXISTS inbox_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_inbox_created ON inbox_messages(created_at);
 
+-- owner's own request backlog (see storage/requests.py)
+CREATE TABLE IF NOT EXISTS requests (
+    id TEXT PRIMARY KEY,
+    created_at REAL NOT NULL,
+    text TEXT NOT NULL,
+    done INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_requests_created ON requests(created_at);
+
 -- private guest rooms (see storage/guest_rooms.py)
 CREATE TABLE IF NOT EXISTS guest_rooms (
     id TEXT PRIMARY KEY,

@@ -18,6 +18,7 @@ import sqlite3
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
@@ -86,6 +87,7 @@ class TelegramService:
         self._poll_lock = threading.Lock()
         self._group_lock = threading.Lock()  # background poller and the "process now" button must not answer twice
         self._owner_lock = threading.Lock()
+        self.storage = storage  # owner's file store: read files for send_file
         if storage is not None:  # the memory store's own connection and lock: one database, one writer at a time
             self._lock = storage._lock
             conn = storage._conn
@@ -605,6 +607,70 @@ class TelegramService:
             res = self._call("sendMessage", {**base, "text": text})  # markup rejected: send the raw text
         return int(res.get("message_id", 0))
 
+
+    # ---------- files and images to the owner's private chat ----------
+    def _call_multipart(self, method: str, fields: dict, file_field: str, filename: str, data: bytes, mime: str):
+        boundary = uuid.uuid4().hex
+        body = bytearray()
+        for k, v in fields.items():
+            body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n").encode("utf-8")
+        body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{file_field}\"; "
+                 f"filename=\"{filename}\"\r\nContent-Type: {mime}\r\n\r\n").encode("utf-8")
+        body += data + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        tok = self.token()
+        if not tok:
+            raise TelegramError("токен бота не задан (Telegram → токен)")
+        req = urllib.request.Request(
+            f"{self.api_base}/bot{tok}/{method}", data=bytes(body), method="POST",
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                res = json.loads(r.read(200_000).decode("utf-8", "replace"))
+        except urllib.error.HTTPError as e:
+            try:
+                res = json.loads(e.read(200_000).decode("utf-8", "replace"))
+            except ValueError:
+                res = {}
+            raise TelegramError(f"{method}: {res.get('description') or 'HTTP ' + str(e.code)}")
+        except Exception as e:  # never echo the URL: it contains the token
+            raise TelegramError(f"{method}: сеть или таймаут ({type(e).__name__})")
+        if not res.get("ok"):
+            raise TelegramError(f"{method}: {res.get('description', 'ошибка')}")
+        return res.get("result") or {}
+
+    def send_file(self, kind: str, *, url: str = "", upload_id: str = "", caption: str = "") -> dict:
+        """Send a picture or a document to the owner's private chat.
+        url: an https link on an allowed host (Telegram downloads it itself).
+        upload_id: a file the owner sent or the assistant stored (read from the owner's storage)."""
+        if kind not in ("photo", "document"):
+            raise TelegramError("kind: photo или document")
+        owner_id = self.policy()["owner_id"]
+        if not owner_id:
+            raise TelegramError("владелец не задан (Telegram → Владелец)")
+        caption = (caption or "").strip()[:1000]
+        field = kind
+        method = "sendPhoto" if kind == "photo" else "sendDocument"
+        if url:
+            if not _allowed_file_url(url):
+                raise TelegramError("ссылка должна быть https и вести на upload.wikimedia.org")
+            res = self._call(method, {"chat_id": str(owner_id), field: url, "caption": caption})
+        elif upload_id:
+            if self.storage is None:
+                raise TelegramError("хранилище файлов недоступно")
+            got = self.storage.read_file_bytes(upload_id)
+            if got is None:
+                raise TelegramError("файл не найден")
+            name, mime, data = got
+            if len(data) > MAX_DOWNLOAD_BYTES:
+                raise TelegramError("файл больше 20 МБ")
+            if kind == "photo" and mime not in IMAGE_MIMES:
+                raise TelegramError("как фото можно отправить только JPEG, PNG, GIF или WebP; иначе используй document")
+            safe = re.sub(r"[^\w.\-]", "_", name)[:100] or "file"
+            res = self._call_multipart(method, {"chat_id": str(owner_id), "caption": caption},
+                                       field, safe, data, mime or "application/octet-stream")
+        else:
+            raise TelegramError("укажи url или upload_id")
+        return {"sent": True, "kind": kind, "message_id": int(res.get("message_id", 0))}
 
     # ---------- queue (posts waiting for approval) ----------
     def submit(self, key: str, text: str, verified: bool = False, reply_to: int | None = None) -> dict:
@@ -1224,6 +1290,16 @@ def set_action_executor(fn) -> None:
 def request_from_tool(question: str, tool: str, arguments: dict) -> dict:
     """Entry point for the ask_confirmation tool."""
     return get_services().request_action(question, tool, arguments)
+
+
+def _allowed_file_url(url: str) -> bool:
+    p = urllib.parse.urlparse(url or "")
+    return p.scheme == "https" and p.hostname == "upload.wikimedia.org"
+
+
+def send_file_from_tool(kind: str, url: str = "", upload_id: str = "", caption: str = "") -> dict:
+    """Entry point for the send_file_to_owner tool."""
+    return get_services().send_file(kind, url=url, upload_id=upload_id, caption=caption)
 
 
 def post_from_tool(channel: str, text: str) -> dict:

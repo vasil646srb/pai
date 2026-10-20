@@ -80,7 +80,7 @@ class CustomFunctionRegistry:
         if not isinstance(fn.parameters, dict):
             raise ValueError("Function parameters must be a JSON Schema object")
         fn.parameters = self._normalize_json_schema(fn.parameters)
-        reserved = {"get_fragment", "search_archive", "calculate_time_delta", "list_fragments_by_timeframe", "web_search", "web_fetch", "propose_function", "propose_rule"}
+        reserved = {"get_fragment", "search_archive", "calculate_time_delta", "list_fragments_by_timeframe", "web_search", "web_fetch", "wikipedia_search", "pubmed_search", "image_search", "propose_function", "propose_rule"}
         if fn.name in reserved:
             raise ValueError(f"Function name is reserved: {fn.name}")
         if any(x.name == fn.name and x.id != fn.id for x in self._functions.values()):

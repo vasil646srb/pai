@@ -6,11 +6,12 @@ from .chat import ChatMixin
 from .files import FilesMixin
 from .guest_rooms import GuestRoomsMixin
 from .inbox import InboxMixin
+from .requests import RequestsMixin
 from .core import StorageCore
 from .logs import LogsMixin
 from .nodes import NodesMixin
 from .wal import WalMixin
 
 
-class Storage(StorageCore, NodesMixin, LogsMixin, WalMixin, ChatMixin, FilesMixin, InboxMixin, GuestRoomsMixin):
+class Storage(StorageCore, NodesMixin, LogsMixin, WalMixin, ChatMixin, FilesMixin, InboxMixin, GuestRoomsMixin, RequestsMixin):
     """Thread-safe storage combining an append-only JSONL WAL with a SQLite index."""

@@ -1170,6 +1170,55 @@ function ensureReasoningBlock(assistantDiv) {
 let chatTurnStartedAt = 0;
 let chatFirstTokenAt = null;
 
+let currentTurn = null; // { id, ctl, stopped } while a chat turn is streaming
+
+// Shows image_search hits as cards under the assistant message. Only Wikimedia Commons
+// upload URLs are accepted, and everything is built with DOM APIs (no innerHTML from data).
+function renderImageGallery(container, items) {
+  const imgs = (Array.isArray(items) ? items : []).filter(
+    (it) => it && typeof it.image_url === "string" && /^https:\/\/upload\.wikimedia\.org\//.test(it.image_url)
+  );
+  if (!imgs.length) return;
+  const wrap = document.createElement("div");
+  wrap.className = "img-gallery";
+  for (const it of imgs.slice(0, 10)) {
+    const fig = document.createElement("figure");
+    fig.className = "img-card";
+    const link = document.createElement("a");
+    link.href = /^https:\/\//.test(it.page_url || "") ? it.page_url : it.image_url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    const img = document.createElement("img");
+    img.src = it.image_url;
+    img.alt = String(it.title || "").slice(0, 200);
+    img.loading = "lazy";
+    img.referrerPolicy = "no-referrer";
+    img.addEventListener("error", () => fig.remove());  // broken thumbnail: drop the card
+    link.appendChild(img);
+    const cap = document.createElement("figcaption");
+    cap.textContent = [it.title, it.license, it.author].filter(Boolean).join(" · ");
+    fig.append(link, cap);
+    wrap.appendChild(fig);
+  }
+  container.appendChild(wrap);
+}
+
+function stopCurrentTurn() {
+  const t = currentTurn;
+  if (!t || t.stopped) return;
+  t.stopped = true;
+  document.getElementById("btnStop").disabled = true;
+  const base = (getApiBase() || "").replace(/\/$/, "");
+  // tell the server first (stops LLM/tool work at the next step), then drop the stream locally
+  fetch(base + "/chat/stop", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ turn_id: t.id }),
+  }).catch(() => {});
+  t.ctl.abort();
+}
+document.getElementById("btnStop").addEventListener("click", stopCurrentTurn);
+
 async function sendChat(override) {
   if (document.getElementById("btnSend").disabled) return;  // Ctrl+Enter used to bypass the disabled button
   chatTurnStartedAt = performance.now();
@@ -1200,6 +1249,12 @@ async function sendChat(override) {
   btn.disabled = true;
   btn.innerHTML = `<span class="spin"></span>`;
   setTokSpeed("генерация…");
+  const turnId = (crypto.randomUUID ? crypto.randomUUID() : `t${Date.now()}${Math.random().toString(36).slice(2)}`);
+  const abortCtl = new AbortController();
+  currentTurn = { id: turnId, ctl: abortCtl, stopped: false };
+  const stopBtn = document.getElementById("btnStop");
+  stopBtn.disabled = false;
+  stopBtn.hidden = false;
 
   const base = getApiBase();
   let assistantDiv = null;
@@ -1249,7 +1304,8 @@ async function sendChat(override) {
     const res = await fetch(streamBase + "/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, persona_id, space_id, images, file_ids: attachedFiles.map((f) => f.id) }),
+      body: JSON.stringify({ text, persona_id, space_id, images, file_ids: attachedFiles.map((f) => f.id), turn_id: turnId }),
+      signal: abortCtl.signal,
     });
     if (!res.ok || !res.body) {
       let detail = `HTTP ${res.status}`;
@@ -1284,6 +1340,9 @@ async function sendChat(override) {
         if (evt.type === "error") {
           throw new Error(evt.message || "ошибка потока");
         }
+        if (evt.type === "stopped") {
+          break;
+        }
         if (evt.type === "tool_call") {
           const trace = ensureToolTraceEl();
           const key = evt.name + "::" + JSON.stringify(evt.arguments);
@@ -1294,6 +1353,10 @@ async function sendChat(override) {
           const key = evt.name + "::" + JSON.stringify(evt.arguments);
           resolveLiveToolCall(liveToolEls[key], evt.result);
           delete liveToolEls[key];
+
+          if (evt.name === "image_search" && evt.result) {
+            renderImageGallery(ensureAssistantDiv(), evt.result.results);
+          }
 
           // После propose_function сервер уже сохранил draft в functions.json.
           // Немедленно перечитываем /functions, чтобы draft появился в UI
@@ -1417,6 +1480,17 @@ async function sendChat(override) {
     if (finalCacheStatus) renderCacheStatus(finalCacheStatus);
     refreshHeaderStack();
   } catch (e) {
+    if (currentTurn && currentTurn.stopped) {
+      // user pressed stop: keep whatever was already streamed, mark it as stopped
+      if (assistantDiv) {
+        assistantDiv.classList.remove("streaming");
+        const metaEl = assistantDiv.querySelector(".meta");
+        if (metaEl) metaEl.textContent = `${persona_id} · остановлено`;
+        if (mdEl && !fullText && !fullReasoning) mdEl.innerHTML = renderMarkdown("⏹ Остановлено");
+      }
+      toast("Запрос остановлен");
+      return;
+    }
     toast("Ошибка чата: " + e.message, "err");
     if (assistantDiv) {
       assistantDiv.classList.remove("streaming");
@@ -1430,6 +1504,9 @@ async function sendChat(override) {
     btn.disabled = false;
     btn.textContent = "Отправить";
     setTokSpeed("");
+    stopBtn.hidden = true;
+    stopBtn.disabled = false;
+    currentTurn = null;
   }
 }
 

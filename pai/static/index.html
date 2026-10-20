@@ -93,9 +93,10 @@
           <input type="file" id="chatFileInput" multiple hidden accept=".txt,.md,.csv,.tsv,.json,.yaml,.yml,.xml,.log,.ini,.toml,.py,.js,.ts,.tsx,.jsx,.html,.css,.sh,.sql,.rs,.go,.java,.c,.cpp,.h,.rb,.php,.swift,.kt,.pdf,.docx" />
           <div class="chat-input-col">
             <div class="chat-attachments" id="chatAttachments"></div>
-            <textarea id="chatInput" placeholder="Сообщение… (Enter — новая строка, Ctrl+Enter — отправить)"></textarea>
+            <textarea id="chatInput" placeholder="Сообщение…"></textarea>
           </div>
           <button class="btn primary" id="btnSend">Отправить</button>
+          <button class="btn ghost danger" id="btnStop" type="button" hidden title="Остановить генерацию">⏹ Остановить</button>
         </div>
       </div>
     </section>

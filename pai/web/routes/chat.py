@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json as _json
 import logging
+import threading
 from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, HTTPException
+from pydantic import BaseModel, Field
 from fastapi.responses import StreamingResponse
 
 from ...api_schemas import (
@@ -16,9 +18,14 @@ from ...llm import LLMError
 from ...orchestrator import Orchestrator
 from ...storage import Storage
 from ...tools import ToolError
+from ...turn_control import begin, cancel, end
 from ..deps import get_orchestrator, get_storage
 
 _log = logging.getLogger("pai.web")
+
+
+class StopRequest(BaseModel):
+    turn_id: str = Field(default="", max_length=64)
 
 
 def register(app: FastAPI) -> None:
@@ -64,13 +71,21 @@ def register(app: FastAPI) -> None:
             except ValueError:
                 raise HTTPException(400, f"Invalid reference_now: {req.reference_now}") from None
 
+        turn_id = req.turn_id or None
+        cancel_ev = begin(turn_id) if turn_id else threading.Event()
+
         def gen():
+            turn = None
             try:
-                for event in orch.handle_turn_stream(
+                turn = orch.handle_turn_stream(
                     req.text, persona_id=req.persona_id, space_id=req.space_id, reference_now=ref_now,
                     images=req.images or None,
                     file_ids=req.file_ids or None,
-                ):
+                )
+                for event in turn:
+                    if cancel_ev.is_set():
+                        yield f"data: {_json.dumps({'type': 'stopped'}, ensure_ascii=False)}\n\n"
+                        break
                     yield f"data: {_json.dumps(event, ensure_ascii=False, default=str)}\n\n"
             except KeyError as e:
                 yield f"data: {_json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
@@ -81,6 +96,12 @@ def register(app: FastAPI) -> None:
             except Exception as e:  # never let the stream die silently
                 _log.exception("chat stream failed")
                 yield f"data: {_json.dumps({'type': 'error', 'message': f'{type(e).__name__}: {e}'}, ensure_ascii=False)}\n\n"
+            finally:
+                # closing the turn stops the LLM stream and tool loop at their next yield point
+                if turn is not None:
+                    turn.close()
+                if turn_id:
+                    end(turn_id)
 
         return StreamingResponse(
             gen(),
@@ -91,6 +112,13 @@ def register(app: FastAPI) -> None:
                 "X-Accel-Buffering": "no",
             },
         )
+
+    @app.post("/chat/stop")
+    def chat_stop(req: StopRequest):
+        if not req.turn_id:
+            raise HTTPException(400, "turn_id is required")
+        cancel(req.turn_id)
+        return {"ok": True}
 
     @app.get("/cache/status")
     def cache_status(orch: Orchestrator = Depends(get_orchestrator)):
