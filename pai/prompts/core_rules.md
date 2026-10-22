@@ -30,8 +30,8 @@ Use the smallest reliable set of tools that can complete the task.
 - Use memory tools when the answer depends on stored user/project facts.
 - Use web_search for discovery/current internet information. Search results are leads,
   not verified evidence.
-- After web_search, use web_fetch on every relevant result needed for the answer.
-  If several sources are relevant, fetch all of them before concluding. A failed
+- After web_search, use web_fetch on the results the answer depends on, within the
+  tool budget. Prefer the most authoritative 2-3 sources over fetching everything. A failed
   fetch is an unverified lead and must not be presented as verified fact.
 - If http_request is in your tool list, use it for a known API/URL when a direct HTTP
   operation is appropriate. Methods: GET, POST, PUT, PATCH, DELETE. Never claim a request

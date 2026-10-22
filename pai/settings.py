@@ -41,6 +41,7 @@ class Settings:
     services_enabled: bool = True
     auth_password: str = ""
     auth_disabled: bool = False
+    brave_search_api_key: str = ""
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -57,6 +58,7 @@ class Settings:
             services_enabled=_flag(env, "PAI_SERVICES", "1"),
             auth_password=env.get("PAI_PASSWORD", ""),
             auth_disabled=_flag(env, "PAI_AUTH_DISABLED", "0"),
+            brave_search_api_key=env.get("BRAVE_SEARCH_API_KEY", "").strip(),
         )
 
 

@@ -326,6 +326,37 @@ class SemanticIndex:
                 break
         return out
 
+    def source_states(self) -> list[dict]:
+        """Every indexable source with its embedding state under the current model.
+
+        state: indexed (chunks exist for the current model), pending (node changed, waiting in
+        the queue), stale (embedded only with another model, needs reindex), missing (not embedded).
+        """
+        key = _model_key(self.settings.get())
+        with self.storage._lock:
+            cur = {(r["kind"], r["source_id"]): r["n"] for r in self.storage._conn.execute(
+                "SELECT kind, source_id, COUNT(*) AS n FROM semantic_chunks WHERE model=? "
+                "GROUP BY kind, source_id", (key,))}
+            old = {(r["kind"], r["source_id"]) for r in self.storage._conn.execute(
+                "SELECT DISTINCT kind, source_id FROM semantic_chunks WHERE model != ?", (key,))}
+        with self._dirty_lock:
+            dirty = set(self._dirty)
+        out = []
+        for kind, sid, space, _tags, occurred, text in self._all_sources():
+            k = (kind, sid)
+            if kind == "node" and sid in dirty:
+                state = "pending"
+            elif k in cur:
+                state = "indexed"
+            elif k in old:
+                state = "stale"
+            else:
+                state = "missing"
+            preview = " ".join((text or "").split())[:160]
+            out.append({"kind": kind, "source_id": sid, "space_id": space, "occurred_at": occurred,
+                        "preview": preview, "chunks": cur.get(k, 0), "state": state})
+        return out
+
     def status(self) -> dict:
         cfg = self.settings.get()
         key = _model_key(cfg)

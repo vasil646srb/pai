@@ -70,7 +70,7 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Search the web (DuckDuckGo). Returns {title, url, snippet}.",
+            "description": "Search the web. Returns {title, url, snippet}.",
             "parameters": {
                 "type": "object",
                 "properties": {

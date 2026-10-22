@@ -4,15 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>pai — персональный ассистент</title>
-<script>
-  // Applied before the stylesheet paints, so there's no dark→light flash
-  // on load. Defaults to light per current design; falls back to
-  // whatever the user picked last time.
-  (function () {
-    var saved = localStorage.getItem("pai.theme");
-    document.documentElement.setAttribute("data-theme", saved === "dark" ? "dark" : "light");
-  })();
-</script>
+<script src="/static/theme-init.js?v=__BUILD__"></script>
 <link rel="stylesheet" href="/static/style.css?v=__BUILD__" />
 </head>
 <body>
@@ -146,7 +138,8 @@
     <!-- ===================== SPACES ===================== -->
     <section class="view" id="view-spaces">
       <h1 class="page-title">Пространства памяти</h1>
-      <p class="page-sub">Отдельные хранилища памяти. Переименование переносит все узлы в новое имя, но не меняет настройки персон и служб (allow_spaces / deny_spaces) — их нужно поправить вручную. Удаление стирает все узлы пространства без возможности восстановления.</p>
+      <p class="page-sub">Отдельные хранилища памяти. Здесь видно, что лежит в каждом пространстве и проиндексировано ли оно для семантического поиска. Переименование переносит все узлы в новое имя, но не меняет настройки персон и служб (allow_spaces / deny_spaces) — их нужно поправить вручную. Удаление стирает все узлы пространства без возможности восстановления.</p>
+      <div id="spacesEmbedBar"></div>
       <div id="spacesList"><div class="empty-state">Загрузка…</div></div>
     </section>
 
@@ -951,34 +944,19 @@
 
 <div class="toast-stack" id="toastStack"></div>
 
-<script>
-(function () {
-  // Android Chrome keyboard fix: dvh doesn't reliably shrink for the
-  // on-screen keyboard, so track visualViewport.height ourselves and
-  // expose it as --vvh. Also nudge the focused input into view since
-  // some keyboards report the resize a frame late.
-  var vv = window.visualViewport;
-  if (!vv) return;
-
-  function setVvh() {
-    document.documentElement.style.setProperty("--vvh", vv.height + "px");
-  }
-  setVvh();
-  vv.addEventListener("resize", setVvh);
-  vv.addEventListener("scroll", setVvh);
-
-  document.addEventListener("focusin", function (e) {
-    var t = e.target;
-    if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT")) {
-      setTimeout(function () {
-        t.scrollIntoView({ block: "nearest", behavior: "smooth" });
-      }, 60);
-    }
-  });
-})();
-</script>
+<script src="/static/viewport-fix.js?v=__BUILD__"></script>
 <script src="/static/md.js?v=__BUILD__"></script>
-<script src="/static/app.js?v=__BUILD__"></script>
+<script src="/static/app/00-core.js?v=__BUILD__"></script>
+<script src="/static/app/10-chat.js?v=__BUILD__"></script>
+<script src="/static/app/20-kv-cache-theme.js?v=__BUILD__"></script>
+<script src="/static/app/30-attachments-jev.js?v=__BUILD__"></script>
+<script src="/static/app/40-telegram-page.js?v=__BUILD__"></script>
+<script src="/static/app/50-chat-send.js?v=__BUILD__"></script>
+<script src="/static/app/60-overview-tree.js?v=__BUILD__"></script>
+<script src="/static/app/70-personas-rules-skills.js?v=__BUILD__"></script>
+<script src="/static/app/80-logs-usage.js?v=__BUILD__"></script>
+<script src="/static/app/90-settings.js?v=__BUILD__"></script>
+<script src="/static/app/95-init-spaces.js?v=__BUILD__"></script>
 <script src="/static/services.js?v=__BUILD__"></script>
 <script src="/static/semantic.js?v=__BUILD__"></script>
 <script src="/static/transcribe.js?v=__BUILD__"></script>

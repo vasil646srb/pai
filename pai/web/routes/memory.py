@@ -141,6 +141,79 @@ def register(app: FastAPI) -> None:
             raise HTTPException(400, f"Invalid backup file: {e}") from e
         return {"mode": mode, "nodes_in_index": count}
 
+    @app.get("/memory/spaces/overview")
+    def spaces_overview(storage: Storage = Depends(get_storage), personas: PersonaRegistry = Depends(get_personas)):
+        """Per space: raw nodes, summaries, files, inbox, requests, and how many of the sources are embedded."""
+        levels: dict[str, dict[str, int]] = {}
+        with storage._lock:
+            for r in storage._conn.execute("SELECT space_id, level, COUNT(*) AS c FROM nodes GROUP BY space_id, level"):
+                levels.setdefault(r["space_id"], {})[r["level"]] = r["c"]
+        semantic = getattr(app.state, "semantic", None)
+        states = semantic.source_states() if semantic is not None else []
+        cfg = app.state.semantic_store.get()
+        all_personas = personas.all()
+        model = semantic.status()["model"] if semantic is not None else ""
+
+        agg: dict[str, dict] = {}
+        for s in states:
+            a = agg.setdefault(s["space_id"], {"by_kind": {}, "states": {}, "chunks": 0})
+            a["by_kind"][s["kind"]] = a["by_kind"].get(s["kind"], 0) + 1
+            a["states"][s["state"]] = a["states"].get(s["state"], 0) + 1
+            a["chunks"] += s["chunks"]
+
+        names = set(levels) | set(agg) | {"personal"}
+        for p in all_personas:
+            names.update(p.memory_filter.allow_spaces)
+        out = []
+        for name in sorted(n for n in names if n):
+            lv = levels.get(name, {})
+            a = agg.get(name, {"by_kind": {}, "states": {}, "chunks": 0})
+            total = sum(a["states"].values())
+            indexed = a["states"].get("indexed", 0)
+            if not cfg["enabled"]:
+                emb = "off"
+            elif total == 0:
+                emb = "empty"
+            elif indexed == total:
+                emb = "ready"
+            elif indexed == 0 and not a["states"].get("pending"):
+                emb = "none"
+            else:
+                emb = "partial"
+            out.append({
+                "space_id": name,
+                "nodes": lv.get(0, 0),
+                "summaries": sum(c for lvl, c in lv.items() if lvl and lvl > 0),
+                "files": a["by_kind"].get("file", 0),
+                "inbox": a["by_kind"].get("inbox", 0),
+                "requests": a["by_kind"].get("request", 0),
+                "personas": [p.persona_id for p in all_personas if name in p.memory_filter.allow_spaces],
+                "embedding": {
+                    "status": emb,
+                    "model": model,
+                    "sources": total,
+                    "indexed": indexed,
+                    "pending": a["states"].get("pending", 0),
+                    "stale": a["states"].get("stale", 0),
+                    "missing": a["states"].get("missing", 0),
+                    "chunks": a["chunks"],
+                },
+            })
+        return out
+
+    @app.get("/memory/spaces/{space_id}/items")
+    def space_items(space_id: str, limit: int = Query(100, ge=1, le=500)):
+        """Sources of one space (newest first) with their embedding state."""
+        semantic = getattr(app.state, "semantic", None)
+        if semantic is None:
+            raise HTTPException(503, "семантический индекс не запущен")
+        items = [s for s in semantic.source_states() if s["space_id"] == space_id]
+        items.sort(key=lambda s: s["occurred_at"] or 0, reverse=True)
+        counts: dict[str, int] = {}
+        for s in items:
+            counts[s["state"]] = counts.get(s["state"], 0) + 1
+        return {"space_id": space_id, "total": len(items), "states": counts, "items": items[:limit]}
+
     @app.get("/memory/spaces/manage")
     def manage_spaces(storage: Storage = Depends(get_storage), personas: PersonaRegistry = Depends(get_personas)):
         """Spaces with their node counts and the personas whose allow_spaces include them."""

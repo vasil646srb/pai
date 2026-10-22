@@ -4,14 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Помощник</title>
-<script>
-  // Same theme key and default as the owner UI; applied before first paint.
-  (function () {
-    var saved = null;
-    try { saved = localStorage.getItem("pai.theme"); } catch (_) {}
-    document.documentElement.setAttribute("data-theme", saved === "dark" ? "dark" : "light");
-  })();
-</script>
+<script src="/static/theme-init.js"></script>
 <link rel="stylesheet" href="/static/style.css" />
 <link rel="stylesheet" href="/static/guest.css" />
 </head>

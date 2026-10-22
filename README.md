@@ -448,10 +448,13 @@ up/
 │   │                     functions, settings, tools, services,
 │   │                     files, speech, vault, auth, guest, system)
 │   │                     + build_* helpers, deps, ui
-│   ├── static/         — single-page UI (index.html, app.js, style.css,
-│   │                     guest.*, inbox.*, services.*, mcp.html)
+│   ├── static/         — single-page UI (index.html, app/*.js (loaded in
+│   │                     filename order), md.js, style.css, theme-init.js,
+│   │                     guest.*, inbox.*, services.*, mcp.html + *-page.js)
 │   ├── laya.py, laya_runtime.py        — decision scoring server
 │   ├── telegram.py, telegram_agent.py  — Telegram integration
+│   │                     (telegram_format.py: Markdown→HTML, splitting;
+│   │                      telegram_messages.py: inbound message helpers)
 │   ├── mcp_client.py, mcp_catalog.py   — MCP client
 │   ├── usage.py, time_utils.py, turns.py, cache_monitor.py
 │   └── speech.py, files_extract.py, services.py
@@ -466,7 +469,13 @@ up/
 ```bash
 python -m pytest tests          # main suite (pytest is configured in pyproject)
 python -m pytest -q tests_laya  # Laya/Jev tests (present after applying Laya builds)
+node --test tests/js/*.test.mjs # front-end tests: markdown escaping, app script load order
 ```
+
+The UI sends a Content-Security-Policy with `script-src 'self'`, so new
+front-end code must go in a file under `pai/static/`, never in an inline
+`<script>` block or an `on*=` attribute. `tests/test_security_headers.py`
+checks this.
 
 `pyproject.toml` sets `testpaths = ["tests"]`, disables the cache provider,
 and configures `ruff` (`-p no:cacheprovider`, line length 120). The main

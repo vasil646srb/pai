@@ -27,8 +27,9 @@ from .web.builders import (
     build_vision_llm_client,
 )
 from .secret_store import SecretStore
-from .tools.web import set_secret_store
+from .tools.web import configure_web_search, set_secret_store
 from .web.auth import install_auth
+from .web.security import install_security_headers
 from .web.routes import register_routes
 from .web.ui import mount_ui
 from .web.util import ensure_pai_logging
@@ -51,12 +52,14 @@ def create_app(
         app.add_middleware(CORSMiddleware, allow_origins=origins,
                            allow_methods=["*"], allow_headers=["Authorization", "Content-Type"])
     install_auth(app, data_dir, settings.auth_password, settings.auth_disabled)
+    install_security_headers(app)
     mount_ui(app)
 
     app.state.storage = storage or Storage(data_dir)
     app.state.llm_config_store = LLMConfigStore(data_dir)
     app.state.secret_store = SecretStore(data_dir)
     set_secret_store(app.state.secret_store)
+    configure_web_search(brave_api_key=settings.brave_search_api_key)
 
     if llm is not None:
         app.state.llm = llm

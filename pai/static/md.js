@@ -1,8 +1,11 @@
 // Shared text helpers for the owner UI and the guest page. Loaded before app.js / guest.js.
+// Safe for text AND for quoted attribute values. innerHTML alone leaves quotes
+// alone, which let a value close an attribute (title="...", value="...") and
+// inject handlers, so quotes are escaped here too.
 function esc(s) {
   const d = document.createElement("div");
   d.textContent = s === undefined || s === null ? "" : String(s);
-  return d.innerHTML;
+  return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 /* ===================== tiny markdown renderer (no deps) ===================== */
@@ -12,6 +15,8 @@ function esc(s) {
 function renderMarkdown(src) {
   if (!src) return "";
   const codeBlocks = [];
+  // Code blocks are swapped for placeholders and restored only at the very end,
+  // so their contents never pass through the line-based markdown rules below.
   let text = src.replace(/```([a-zA-Z0-9_-]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
     const idx = codeBlocks.length;
     codeBlocks.push(`<pre><code>${esc(code.replace(/\n$/, ""))}</code></pre>`);
@@ -19,9 +24,6 @@ function renderMarkdown(src) {
   });
 
   text = esc(text);
-  // restore code blocks (already escaped internally)
-  text = text.replace(/\u0000CODEBLOCK(\d+)\u0000/g, (_, i) => codeBlocks[Number(i)]);
-  // re-escape stray \u0000 markers that esc() would have mangled — none expected, no-op otherwise
 
   const lines = text.split("\n");
   const out = [];
@@ -39,7 +41,7 @@ function renderMarkdown(src) {
     .replace(/\[([^\]]+)\]\(((?:https?:\/\/)[^)\s"'<>]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 
   for (const raw of lines) {
-    if (raw.startsWith("\u0000CODEBLOCK") || /^<pre>/.test(raw)) { closeLists(); out.push(raw); continue; }
+    if (/^\u0000CODEBLOCK\d+\u0000$/.test(raw)) { closeLists(); out.push(raw); continue; }
     const line = raw;
     if (/^\s*$/.test(line)) { closeLists(); continue; }
     let m;
@@ -73,6 +75,6 @@ function renderMarkdown(src) {
     out.push(`<p>${inline(line)}</p>`);
   }
   closeLists();
-  return out.join("\n");
+  return out.join("\n").replace(/\u0000CODEBLOCK(\d+)\u0000/g, (_, i) => codeBlocks[Number(i)]);
 }
 

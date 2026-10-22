@@ -1,6 +1,7 @@
 """Static UI mount: the SPA shell at / and the no-cache asset handler."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from fastapi import FastAPI, Response
@@ -32,6 +33,20 @@ class NoCacheStaticFiles(StaticFiles):
         return response
 
 
+_BUILD_REF = re.compile(r"(/static/[\w./-]+)\?v=__BUILD__")
+
+
+def _with_build_versions(html: str) -> str:
+    """Stamp every `/static/<file>?v=__BUILD__` reference with that file's mtime."""
+    def stamp(m: re.Match) -> str:
+        try:
+            v = int((STATIC_DIR / m.group(1)[len("/static/"):]).stat().st_mtime)
+        except OSError:
+            v = 0
+        return f"{m.group(1)}?v={v}"
+    return _BUILD_REF.sub(stamp, html)
+
+
 def mount_ui(app: FastAPI) -> None:
     """Serve the single-page UI from /static and render index.html at /."""
     if STATIC_DIR.exists():
@@ -39,11 +54,8 @@ def mount_ui(app: FastAPI) -> None:
 
         @app.get("/", include_in_schema=False)
         def index():
-            js_v = int((STATIC_DIR / "app.js").stat().st_mtime)
-            css_v = int((STATIC_DIR / "style.css").stat().st_mtime)
             html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-            html = html.replace("app.js?v=__BUILD__", f"app.js?v={js_v}")
-            html = html.replace("style.css?v=__BUILD__", f"style.css?v={css_v}")
+            html = _with_build_versions(html)
             return Response(
                 content=html,
                 media_type="text/html",

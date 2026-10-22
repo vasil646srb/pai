@@ -142,8 +142,6 @@ class ContextBuilder:
 
         add("core_rules", "Базовые правила (core rules)", "instructions", DEFAULT_CORE_RULES)
         add("persona_addon", f"Инструкции персоны «{persona.name}»", "instructions", persona.system_core_addon)
-        add("time_header", "Время / персона", "instructions",
-            tctx.header(persona_name=persona.name, tone=persona.tone))
         filt = [f"Current memory space: {space_id}",
                 f"Readable spaces: {', '.join(mf.allow_spaces) or 'all'}"]
         if mf.deny_spaces:
@@ -180,6 +178,10 @@ class ContextBuilder:
                 count=len(tail_nodes), user_msgs=n_user,
                 assistant_msgs=len(tail_nodes) - n_user,
                 tail_length_cfg=self.tail_length)
+        # Time goes last: it changes every minute, so placing it before memory and history
+        # would invalidate the KV cache for everything after it.
+        add("time_header", "Время / персона", "instructions",
+            tctx.header(persona_name=persona.name, tone=persona.tone))
         return segs
 
     def build_system_prompt(

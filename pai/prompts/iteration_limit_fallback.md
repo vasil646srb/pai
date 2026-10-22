@@ -1,1 +1,1 @@
-I've reached my tool iteration limit; here is my best answer based on what I know. / The tool-call iteration limit has been reached; below is my best answer based on the information gathered so far.
+I've reached the tool-call iteration limit, so this is my best answer based on the information gathered so far.
