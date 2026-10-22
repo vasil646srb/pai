@@ -10,6 +10,7 @@ from .schemas import (
     BRAIN_PERSONA_ID,
     MODEL_GRANT_DENYLIST,
     PERSONA_TOOL_SCHEMAS,
+    TOOL_DESCRIBE_SCHEMA,
     TOOL_PLAN_SCHEMA,
     TOOL_SCHEMAS,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "PersonaToolsMixin",
     "ProposalToolsMixin",
     "ShellToolsMixin",
+    "TOOL_DESCRIBE_SCHEMA",
     "TOOL_PLAN_SCHEMA",
     "TOOL_SCHEMAS",
     "ToolDispatcher",

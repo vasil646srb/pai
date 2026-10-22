@@ -111,6 +111,15 @@ def create_app(
         verify_max_checks=saved_config.verify_max_checks,
     )
     app.state.settings = settings
+    from .semantic import SemanticIndex, SemanticSettingsStore
+    app.state.semantic_store = SemanticSettingsStore(Path(data_dir) / "semantic_settings.json")
+    app.state.semantic = SemanticIndex(app.state.storage, app.state.semantic_store)
+    app.state.semantic.start()
+    from .transcribe import TranscribeSettingsStore, install as install_transcribe
+    from .transcribe_log import TranscribeLog
+    app.state.transcribe_store = TranscribeSettingsStore(Path(data_dir) / "transcribe_settings.json")
+    app.state.transcribe_log = TranscribeLog(Path(data_dir) / "transcribe_log.json")
+    install_transcribe(app.state.transcribe_store, app.state.transcribe_log)  # audio/video -> text, history kept
     app.state.services = ServiceStore(Path(data_dir) / "services.json")
     register_routes(app)
 

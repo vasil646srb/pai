@@ -187,6 +187,10 @@ function switchView(name, { persist = true } = {}) {
   if (name === "usage") loadUsage();
   if (name === "actionlog") loadActionLog();
   if (name === "services" && window.loadServicesView) window.loadServicesView();
+  if (name === "semantic" && window.loadSemanticView) window.loadSemanticView();
+  if (name === "data" && window.loadDataView) window.loadDataView();
+  if (name === "embeddings" && window.loadEmbeddingsView) window.loadEmbeddingsView();
+  if (name === "transcribe" && window.loadTranscribeView) window.loadTranscribeView();
 }
 
 document.querySelectorAll(".nav-item").forEach((el) => {
@@ -3395,3 +3399,55 @@ document.getElementById("spacesList").addEventListener("click", async (ev) => {
     toast("Ошибка: " + e.message, "err");
   }
 });
+
+/* ===================== sidebar groups (collapsible) ===================== */
+// Each "nav-section-label" becomes a header of a group; the items under it are wrapped in .nav-group.
+// Collapsed groups are remembered per browser. The active view stays visible even in a collapsed group.
+(function initSidebarGroups() {
+  const LS_KEY_COLLAPSED = "pai.sidebarCollapsed";
+  const sidebar = document.getElementById("sidebar");
+  if (!sidebar) return;
+
+  let collapsed = [];
+  try { collapsed = JSON.parse(localStorage.getItem(LS_KEY_COLLAPSED) || "[]"); } catch (_) { collapsed = []; }
+  const save = () => { try { localStorage.setItem(LS_KEY_COLLAPSED, JSON.stringify(collapsed)); } catch (_) {} };
+
+  sidebar.querySelectorAll(".nav-section-label").forEach((label) => {
+    const key = label.textContent.trim();
+    const items = [];
+    let el = label.nextElementSibling;
+    while (el && !el.classList.contains("nav-section-label")) { items.push(el); el = el.nextElementSibling; }
+
+    const group = document.createElement("div");
+    group.className = "nav-group";
+    group.dataset.group = key;
+    sidebar.insertBefore(group, label);
+    group.appendChild(label);
+    items.forEach((i) => group.appendChild(i));
+
+    label.classList.add("nav-group-head");
+    label.setAttribute("role", "button");
+    label.setAttribute("tabindex", "0");
+    const caret = document.createElement("span");
+    caret.className = "caret";
+    caret.textContent = "▾";
+    label.textContent = "";
+    label.append(caret, document.createTextNode(key));
+
+    const apply = () => {
+      const isCollapsed = collapsed.includes(key);
+      group.classList.toggle("collapsed", isCollapsed);
+      label.setAttribute("aria-expanded", String(!isCollapsed));
+    };
+    const toggle = () => {
+      collapsed = collapsed.includes(key) ? collapsed.filter((k) => k !== key) : [...collapsed, key];
+      save();
+      apply();
+    };
+    label.addEventListener("click", toggle);
+    label.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+    });
+    apply();
+  });
+})();

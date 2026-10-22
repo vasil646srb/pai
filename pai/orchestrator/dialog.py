@@ -34,10 +34,16 @@ from ..llm import LLMError
 from ..models import NodeType, Persona
 from ..prompts import load_prompt
 from ..time_utils import normalize_relative_dates
-from ..tools import TOOL_PLAN_SCHEMA, ToolDispatcher, ToolError
+from ..tools import TOOL_DESCRIBE_SCHEMA, TOOL_PLAN_SCHEMA, ToolDispatcher, ToolError
 from ..usage import estimate_tokens
 from .base import _build_user_content
 from .llm_runner import _ITERATION_LIMIT_FALLBACK, _ITERATION_LIMIT_NUDGE
+from .tool_pool import (
+    DESCRIBE_TOOL_NAME,
+    MAX_DESCRIBE_STEPS,
+    describe_payload,
+    extract_describe_request,
+)
 
 if TYPE_CHECKING:
     from .base import Orchestrator, TurnResult
@@ -506,6 +512,34 @@ class DialogLoop:
             final_content, streamed = new_content, new_streamed
         return tool_trace, final_content, streamed
 
+    def _planning_call(self, state, phase_messages, tool_schemas, phase, space_id, segments):
+        """Generator. One planner call. describe_tools requests are answered inline and do not use up a
+        round. Returns (result, phase_messages); the described schemas stay in phase_messages for the
+        rest of this answer, so they are not requested again."""
+        result = None
+        for step in range(MAX_DESCRIBE_STEPS + 1):
+            planner_messages = self._planner_messages(phase_messages, tool_schemas, phase)
+            result = yield from self._llm_phase(
+                state, planner_messages, [TOOL_PLAN_SCHEMA, TOOL_DESCRIBE_SCHEMA], phase, space_id, segments,
+                tool_choice="auto",
+            )
+            asked = extract_describe_request(result)
+            if asked is None or step == MAX_DESCRIBE_STEPS:
+                break
+            names, call_id = asked
+            if result["streamed_content"]:
+                yield {"type": "delta_reset"}
+            payload = json.dumps(describe_payload(names, tool_schemas), ensure_ascii=False)
+            phase_messages = phase_messages + [
+                {"role": "assistant", "content": None, "tool_calls": [{
+                    "id": call_id, "type": "function",
+                    "function": {"name": DESCRIBE_TOOL_NAME,
+                                 "arguments": json.dumps({"names": names}, ensure_ascii=False)},
+                }]},
+                {"role": "tool", "tool_call_id": call_id, "content": payload},
+            ]
+        return result, phase_messages
+
     def _tool_loop(
         self,
         state: _TurnState,
@@ -529,9 +563,8 @@ class DialogLoop:
 
         for iteration in range(self.max_tool_iterations):
             phase = "planning" if iteration == 0 else "analysis"
-            planner_messages = self._planner_messages(phase_messages, tool_schemas, phase)
-            result = yield from self._llm_phase(
-                state, planner_messages, [TOOL_PLAN_SCHEMA], phase, space_id, segments, tool_choice="auto",
+            result, phase_messages = yield from self._planning_call(
+                state, phase_messages, tool_schemas, phase, space_id, segments,
             )
             content = (result.get("content") or "").strip()
             pool, plan_error = self._extract_tool_pool(result)

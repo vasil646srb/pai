@@ -135,12 +135,16 @@ class StorageCore:
 
     def __init__(self, data_dir: str | os.PathLike):
         self.data_dir = Path(data_dir)
+        self.write_hooks: list = []  # вызываются после каждой записи узла (индекс поиска)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.wal_path = self.data_dir / "wal.jsonl"
         self.db_path = self.data_dir / "index.sqlite3"
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        # timeout: wait for a lock instead of failing at once; WAL: readers do not block the writer
+        self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False, timeout=30)
         self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=30000")
         self._conn.executescript(SCHEMA)
         self._migrate_schema()
         self._conn.commit()
@@ -175,6 +179,11 @@ class StorageCore:
             self._append_wal("put", node)
             self._upsert_sqlite(node)
             self._conn.commit()
+            for hook in self.write_hooks:
+                try:
+                    hook(node)
+                except Exception:  # индекс не должен ломать запись
+                    pass
             return node
 
     def _upsert_sqlite(self, node: MemoryNode) -> None:

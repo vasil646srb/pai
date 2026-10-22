@@ -25,11 +25,14 @@ def register(app: FastAPI) -> None:
 
     init_services(app.state.secret_store, app.state.llm_config_store.path.parent, storage=app.state.storage)
 
-    from ...telegram import send_manual, set_classifier, set_options_source, set_owner_responder, set_responder
-    from ...telegram_agent import GROUP_SPACE, classify, group_persona, make_owner_responder, make_responder
+    from ...telegram import (send_manual, set_classifier, set_media_classifier, set_options_source,
+                             set_owner_responder, set_responder)
+    from ...telegram_agent import (GROUP_SPACE, classify, classify_media, group_persona, make_owner_responder,
+                                   make_responder)
 
     app.state.personas.ephemeral(group_persona())  # isolated persona for group replies, never saved to personas.json
     set_classifier(classify)  # Jev: does a group message need an answer?
+    set_media_classifier(classify_media)  # Jev: is the owner's voice/video a command or only a note?
     set_responder(make_responder(app.state.orchestrator, app.state.personas))  # persona telegram_group writes the answer
     set_owner_responder(make_owner_responder(app.state.orchestrator))  # owner's private messages = brain commands
 

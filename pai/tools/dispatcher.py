@@ -11,6 +11,7 @@ from .proposals import ProposalToolsMixin
 from .schemas import BRAIN_ONLY_TOOLS, BRAIN_PERSONA_ID, TOOL_SCHEMAS
 from .sources import SourcesToolsMixin
 from .shell import ShellToolsMixin
+from .semantic import SemanticToolsMixin
 
 # Personas that may never change rules or functions, even though propose_* tools are otherwise always granted.
 RESTRICTED_PERSONA_PREFIX = "guest"  # 'guest' and every per-room 'guest-room-<id>' persona
@@ -23,7 +24,7 @@ from .web import WebToolsMixin
 _log = logging.getLogger(__name__)
 
 
-class ToolDispatcher(PersonaToolsMixin, ProposalToolsMixin, MemoryToolsMixin, WebToolsMixin, SourcesToolsMixin, ShellToolsMixin):
+class ToolDispatcher(PersonaToolsMixin, ProposalToolsMixin, MemoryToolsMixin, WebToolsMixin, SourcesToolsMixin, ShellToolsMixin, SemanticToolsMixin):
     """Routes tool calls to the mixins that implement them."""
 
     def __init__(

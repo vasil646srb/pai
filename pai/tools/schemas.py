@@ -517,3 +517,50 @@ TOOL_SCHEMAS.append({
         }, "required": ["kind"]},
     },
 })
+
+TOOL_SCHEMAS.append({
+    "type": "function",
+    "function": {
+        "name": "semantic_search",
+        "description": (
+            "Поиск по смыслу по всей базе: память, файлы, входящие, запросы. Находит по значению, "
+            "а не по точным словам. Возвращает фрагменты с score (косинусная близость, 0-1). "
+            "Если подходящего нет, так и скажи."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "space_id": {"type": "string", "description": "Необязательно: ограничить пространством"},
+                "limit": {"type": "integer", "default": 8},
+            },
+            "required": ["query"],
+        },
+    },
+})
+
+# Control call for the planner: returns full parameter schemas of catalog tools.
+# Never executed and never added to TOOL_SCHEMAS, so it is not a grantable persona tool.
+TOOL_DESCRIBE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "describe_tools",
+        "description": (
+            "Orchestration-only control: get the full parameter schema of tools listed in the catalog. "
+            "Call it before using a tool in plan_tool_pool if you have not seen its schema in this conversation. "
+            "It runs no tool and does not use a planning round."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "names": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 12,
+                    "description": "Tool names from the catalog.",
+                },
+            },
+            "required": ["names"],
+        },
+    },
+}

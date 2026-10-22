@@ -51,6 +51,8 @@
     <div class="nav-item" data-view="overview"><span class="ico">▸</span>Обзор</div>
     <div class="nav-item" data-view="tree"><span class="ico">▸</span>Дерево / узлы</div>
     <div class="nav-item" data-view="spaces"><span class="ico">▸</span>Пространства</div>
+    <div class="nav-item" data-view="semantic"><span class="ico">▸</span>Поиск по памяти</div>
+    <div class="nav-item" data-view="data"><span class="ico">▸</span>Данные</div>
     <div class="nav-section-label">Управление</div>
     <div class="nav-item" data-view="personas"><span class="ico">▸</span>Персоны</div>
     <div class="nav-item" data-view="skills"><span class="ico">▸</span>Скилы</div>
@@ -60,6 +62,8 @@
     <div class="nav-item" data-view="actionlog"><span class="ico">▸</span>Лог действий</div>
     <div class="nav-item" data-view="services"><span class="ico">▸</span>Службы</div>
     <div class="nav-item" data-view="telegram"><span class="ico">▸</span>Telegram</div>
+    <div class="nav-item" data-view="embeddings"><span class="ico">▸</span>Эмбеддинги</div>
+    <div class="nav-item" data-view="transcribe"><span class="ico">▸</span>Распознавание речи</div>
     <div class="nav-item" data-view="settings"><span class="ico">▸</span>Настройки</div>
   </div>
 
@@ -90,7 +94,7 @@
           <button class="chat-attach-btn" id="btnAttachImage" type="button" title="Прикрепить изображение">📎</button>
           <button class="chat-attach-btn" id="btnAttachFile" type="button" title="Прикрепить файл (txt, md, код, pdf, docx)">📄</button>
           <input type="file" id="chatImageInput" accept="image/*" multiple hidden />
-          <input type="file" id="chatFileInput" multiple hidden accept=".txt,.md,.csv,.tsv,.json,.yaml,.yml,.xml,.log,.ini,.toml,.py,.js,.ts,.tsx,.jsx,.html,.css,.sh,.sql,.rs,.go,.java,.c,.cpp,.h,.rb,.php,.swift,.kt,.pdf,.docx" />
+          <input type="file" id="chatFileInput" multiple hidden accept=".txt,.md,.csv,.tsv,.json,.yaml,.yml,.xml,.log,.ini,.toml,.py,.js,.ts,.tsx,.jsx,.html,.css,.sh,.sql,.rs,.go,.java,.c,.cpp,.h,.rb,.php,.swift,.kt,.pdf,.docx,.ogg,.oga,.opus,.mp3,.wav,.m4a,.aac,.flac,.mp4,.m4v,.mov,.webm,.mkv,.avi" />
           <div class="chat-input-col">
             <div class="chat-attachments" id="chatAttachments"></div>
             <textarea id="chatInput" placeholder="Сообщение…"></textarea>
@@ -232,6 +236,181 @@
         </div>
       </div>
       </details>
+    </section>
+
+    <!-- ===================== SEMANTIC SEARCH ===================== -->
+    <section class="view" id="view-semantic">
+      <div class="page-head"><h1>Поиск по памяти</h1>
+        <p class="page-sub">Поиск по смыслу по всей базе: память, файлы, входящие и запросы. Нужен включённый индекс в разделе «Эмбеддинги».</p></div>
+
+      <div class="card">
+        <div class="field"><label>Запрос</label><input type="text" id="semQuery" placeholder="Что найти по смыслу…" /></div>
+        <div class="grid grid-3">
+          <div class="field"><label>Точность</label><select id="semPrecision"></select></div>
+          <div class="field"><label>Максимум результатов</label><input type="number" id="semTopK" min="1" max="200" value="20" /></div>
+          <div class="field"><label>Пространство (пусто = все)</label><input type="text" id="semSpace" /></div>
+        </div>
+        <div class="llm-settings-actions">
+          <button class="btn primary" id="semSearchBtn">Искать</button>
+        </div>
+      </div>
+
+      <div id="semResults" style="margin-top:12px;"></div>
+
+      <div class="section-title sub">Точность поиска</div>
+      <div class="card">
+        <div class="grid grid-2">
+          <div class="field"><label>Порог вручную (пусто = по шкале точности)</label><input type="number" id="semMinScore" step="0.01" min="0" max="1" /></div>
+          <div class="field"><label>Состояние индекса</label><div class="field-hint" id="semStatus">…</div></div>
+        </div>
+        <div class="llm-settings-actions">
+          <button class="btn primary" id="semSaveBtn">Сохранить</button>
+          <span class="form-msg" id="semSaveMsg"></span>
+        </div>
+        <div class="field-hint" style="margin-top:8px;">Шкала: 1 широкий · 2 свободный · 3 обычный · 4 строгий · 5 точный. Пороги зависят от модели, подбирайте по результатам.</div>
+      </div>
+    </section>
+
+    <!-- ===================== EMBEDDINGS ===================== -->
+    <section class="view" id="view-embeddings">
+      <div class="page-head"><h1>Эмбеддинги</h1>
+        <p class="page-sub">Сервер эмбеддингов в локальной сети (EmbeddingGemma, OpenAI-совместимый /v1/embeddings). Индекс строится по всей базе и пополняется по мере записи.</p></div>
+
+      <div class="card">
+        <label class="check-row"><input type="checkbox" id="embEnabled" /> Семантический индекс включён</label>
+        <div class="grid grid-2">
+          <div class="field"><label>Адрес сервера</label><input type="text" id="embBaseUrl" placeholder="http://192.168.1.50:8080/v1" /></div>
+          <div class="field"><label>Модель</label><input type="text" id="embModel" placeholder="embeddinggemma-300m" /></div>
+          <div class="field"><label>Формат API</label>
+            <select id="embApi">
+              <option value="openai">openai: /v1/embeddings (llama-server, Ollama)</option>
+              <option value="texts">texts: /embed (свой сервер)</option>
+            </select></div>
+          <div class="field"><label>Размерность вектора</label>
+            <select id="embDim">
+              <option value="0">полная</option>
+              <option value="128">128</option>
+              <option value="256">256</option>
+              <option value="512">512</option>
+              <option value="768">768</option>
+            </select></div>
+          <div class="field"><label>Размер чанка, симв.</label><input type="number" id="embChunk" min="200" max="4000" /></div>
+          <div class="field"><label>Перекрытие чанков, симв.</label><input type="number" id="embOverlap" min="0" max="2000" /></div>
+        </div>
+        <div class="field-hint">Смена модели, размерности или размера чанка требует переиндексации. Когда индекс выключен, записи только ставятся в очередь.</div>
+        <div class="llm-settings-actions">
+          <button class="btn primary" id="embSave">Сохранить</button>
+          <button class="btn ghost" id="embPing">Проверить сервер</button>
+          <button class="btn ghost" id="embReindex">Переиндексировать всё</button>
+          <span class="form-msg" id="embMsg"></span>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:12px;">
+        <div class="section-title sub">Состояние индекса</div>
+        <div class="field-hint" id="embStatus">…</div>
+        <div class="prog" id="embProgress" hidden>
+          <div class="prog-bar"><i id="embProgressBar"></i></div>
+          <div class="field-hint" id="embProgressText"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== TRANSCRIBE (WHISPER) ===================== -->
+    <section class="view" id="view-transcribe">
+      <div class="page-head"><h1>Распознавание речи</h1>
+        <p class="page-sub">Аудио и видео превращаются в текст через Whisper-сервер в локальной сети (OpenAI-совместимый /v1/audio/transcriptions). Распознаётся то, что приходит в веб-чат и в Telegram.</p></div>
+
+      <div class="card">
+        <label class="check-row"><input type="checkbox" id="trEnabled" /> Распознавание речи включено</label>
+        <div class="grid grid-2">
+          <div class="field"><label>Адрес сервера</label><input type="text" id="trBaseUrl" placeholder="http://192.168.1.50:8000/v1" /></div>
+          <div class="field"><label>Модель</label><input type="text" id="trModel" placeholder="large-v3" /></div>
+          <div class="field"><label>Язык (пусто = определять автоматически)</label><input type="text" id="trLanguage" placeholder="ru, en…" /></div>
+          <div class="field"><label>Таймаут на один файл, с</label><input type="number" id="trTimeout" min="5" max="3600" /></div>
+          <div class="field"><label>Не расшифровывать Telegram-записи длиннее, с</label><input type="number" id="trMaxDuration" min="10" max="7200" /></div>
+        </div>
+        <div class="field-hint" id="trState">…</div>
+        <div class="llm-settings-actions">
+          <button class="btn primary" id="trSave">Сохранить</button>
+          <button class="btn ghost" id="trPing">Проверить сервер</button>
+          <span class="form-msg" id="trMsg"></span>
+        </div>
+        <div class="field-hint" style="margin-top:8px;">«Проверить сервер» отправляет секунду тишины и показывает время ответа. Таймаут и лимит длительности относятся только к Telegram: в веб-чате файл ждёт расшифровку, пока сервер не ответит.</div>
+      </div>
+
+      <div class="section-title sub">История обработанных файлов</div>
+      <div class="card">
+        <div class="settings-row" style="margin-bottom:12px;">
+          <label>Источник
+            <select id="trFilterSource">
+              <option value="">все</option>
+              <option value="upload">веб-чат</option>
+              <option value="telegram-group">группа Telegram</option>
+              <option value="telegram-owner">личка владельца</option>
+            </select>
+          </label>
+          <label>Статус
+            <select id="trFilterStatus">
+              <option value="">все</option>
+              <option value="ok">распознано</option>
+              <option value="empty">речи нет</option>
+              <option value="error">ошибка</option>
+            </select>
+          </label>
+          <button class="btn ghost" id="trHistRefresh">Обновить</button>
+          <button class="btn ghost" id="trHistClear">Очистить историю</button>
+        </div>
+        <div class="field-hint" id="trSummary">…</div>
+        <div id="trHistory" style="margin-top:10px;"></div>
+        <div class="form-msg" id="trHistMsg"></div>
+      </div>
+    </section>
+
+    <!-- ===================== DATA EXPLORER ===================== -->
+    <section class="view" id="view-data">
+      <div class="page-head"><h1>Данные</h1>
+        <p class="page-sub">Всё, что хранится в базе: память по пространствам, файлы, входящие и запросы. Просмотр, поиск по тексту и статус индекса.</p></div>
+
+      <div class="section-title sub">Типы записей</div>
+      <div class="data-kinds" id="dataKinds"></div>
+
+      <div class="section-title sub">Пространства</div>
+      <div class="data-kinds" id="dataSpaces"></div>
+
+      <div class="section-title sub">Записи</div>
+      <div class="card">
+        <div class="data-filters">
+          <div class="field"><label>Тип</label>
+            <select id="dataKind">
+              <option value="node">память</option>
+              <option value="file">файлы</option>
+              <option value="inbox">входящие</option>
+              <option value="request">запросы</option>
+            </select></div>
+          <div class="field"><label>Поиск по тексту</label><input type="text" id="dataQ" placeholder="подстрока" /></div>
+          <div class="field"><label>Пространство</label><select id="dataSpace"><option value="">все</option></select></div>
+          <div class="field"><label>В индексе</label>
+            <select id="dataIndexed">
+              <option value="all">все</option>
+              <option value="yes">да</option>
+              <option value="no">нет</option>
+            </select></div>
+        </div>
+        <div class="llm-settings-actions">
+          <button class="btn primary" id="dataApply">Показать</button>
+          <span class="form-msg" id="dataMsg"></span>
+        </div>
+      </div>
+
+      <div id="dataList" class="data-list"></div>
+      <div class="data-pager">
+        <button class="btn ghost" id="dataPrev">← Назад</button>
+        <span class="field-hint" id="dataPage"></span>
+        <button class="btn ghost" id="dataNext">Дальше →</button>
+      </div>
+
+      <div class="card data-detail" id="dataDetail" hidden></div>
     </section>
 
     <!-- ===================== SKILLS ===================== -->
@@ -801,6 +980,9 @@
 <script src="/static/md.js?v=__BUILD__"></script>
 <script src="/static/app.js?v=__BUILD__"></script>
 <script src="/static/services.js?v=__BUILD__"></script>
+<script src="/static/semantic.js?v=__BUILD__"></script>
+<script src="/static/transcribe.js?v=__BUILD__"></script>
+<script src="/static/data.js?v=__BUILD__"></script>
 
 <div class="stats-modal-backdrop" id="statsModalBackdrop"></div>
 <div class="stats-modal" id="statsModal" role="dialog" aria-label="Статистика текущего ответа">

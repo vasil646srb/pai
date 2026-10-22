@@ -12,7 +12,7 @@ from __future__ import annotations
 import base64
 
 from .models import MemoryFilter, Persona
-from .telegram import IMAGE_MIMES, HeldReply, get_services, tg_options  # noqa: E402
+from .telegram import IMAGE_MIMES, HeldReply, get_services, group_body, tg_options  # noqa: E402
 
 LENGTH_HINT = {
     "short": "коротко: 1–3 предложения",
@@ -77,6 +77,26 @@ def classify(text: str, sender: str = "") -> dict | None:
     return {"needs_reply": nr.label == "yes" and nr.p >= threshold, "kind": r["kind"].label}
 
 
+MEDIA_ANSWER_MIN_P = 0.7  # Jev must be this sure that a voice/video is only a note before it is kept without an answer
+
+
+def classify_media(transcript: str) -> str | None:
+    """Owner's voice or video, by its transcript: 'answer' (a command or question, the default) or 'note'.
+    Jev only chooses 'note' when it is sure; any doubt is an answer, so a command is never silently dropped."""
+    lay = get_laya()
+    if lay is None or not lay.enabled or not (transcript or "").strip():
+        return None
+    r = lay.ask(f"Voice or video message sent by the owner to their own assistant. Transcript:\n{transcript[:2000]}", {
+        "action": ("Is this message a question, a request or an instruction for the assistant (answer), "
+                   "or only a note, a thought or a memo that needs no reply (note)? Answer answer or note.",
+                   ["answer", "note"]),
+    })
+    if not r or "action" not in r:
+        return None
+    a = r["action"]
+    return "note" if a.label == "note" and a.p >= MEDIA_ANSWER_MIN_P else "answer"
+
+
 def _image_uri(a: dict) -> str | None:
     """Data URI of a downloaded image attachment, or None if it is not a usable image."""
     if a.get("data") is None or a.get("mime") not in IMAGE_MIMES:
@@ -98,7 +118,7 @@ def make_responder(orch, personas, space_id: str = GROUP_SPACE, persona_id: str 
         prompt = (
             "Новое сообщение в нашей группе Telegram.\n"
             f"От: {item.get('from') or 'участник'}\n"
-            f"Текст:\n{item.get('text', '')}\n{pics}\n"
+            f"Текст:\n{group_body(item)}\n{pics}\n"
             f"Напиши ответ для группы, {LENGTH_HINT[size]}, на языке сообщения. "
             "Не раскрывай личные данные владельца и заметки. Если не знаешь ответа, так и скажи."
         )
@@ -136,7 +156,8 @@ def make_owner_responder(orch):
                 continue
             names.append(a["name"])
             try:  # every file is kept in the owner's space; its id is written into the message row
-                meta = orch.storage.store_upload(a["name"], a["data"], space_id=space, any_type=True)
+                known = a.get("transcript") if "transcript" in a else None  # speech already recognized upstream
+                meta = orch.storage.store_upload(a["name"], a["data"], space_id=space, any_type=True, known_text=known)
                 a["upload_id"] = meta["id"]
                 file_ids.append(meta["id"])
             except ValueError as e:

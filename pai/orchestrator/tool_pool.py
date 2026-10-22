@@ -30,6 +30,57 @@ _MARKUP_PLAN_RE = re.compile(
     re.DOTALL,
 )
 
+DESCRIBE_TOOL_NAME = "describe_tools"
+MAX_DESCRIBE_STEPS = 2   # describe rounds inside one planning call; they do not use up a tool round
+MAX_DESCRIBE_NAMES = 12
+
+
+def _purpose(description: str, limit: int = 120) -> str:
+    """First sentence of a tool description, for the compact catalog."""
+    text = " ".join(str(description or "").split())
+    cut = text.find(". ")
+    if 0 < cut < limit:
+        text = text[: cut + 1]
+    return text[:limit]
+
+
+def extract_describe_request(result: dict) -> tuple[list[str], str] | None:
+    """(names, call_id) when the model asked for schemas and did not plan a pool in the same reply."""
+    calls = result.get("tool_calls") or []
+    if any(tc.get("name") == "plan_tool_pool" for tc in calls):
+        return None
+    call = next((tc for tc in calls if tc.get("name") == DESCRIBE_TOOL_NAME), None)
+    if call is None:
+        return None
+    names = (call.get("arguments") or {}).get("names")
+    if isinstance(names, str):
+        try:
+            names = json.loads(names)
+        except json.JSONDecodeError:
+            names = [names]
+    if not isinstance(names, list):
+        names = []
+    clean: list[str] = []
+    for n in names:
+        s = str(n).strip()
+        if s and s not in clean:
+            clean.append(s)
+    return clean[:MAX_DESCRIBE_NAMES], str(call.get("id") or f"describe-{len(calls)}")
+
+
+def describe_payload(names: list[str], tool_schemas: list[dict]) -> dict:
+    """Full schemas for the requested names. tool_schemas is already the persona's filtered list,
+    so a tool the persona may not use is reported as not_available and is never described."""
+    by_name = {s.get("function", {}).get("name"): s.get("function", {}) for s in tool_schemas}
+    tools, missing = [], []
+    for n in names:
+        fn = by_name.get(n)
+        if fn is None:
+            missing.append(n)
+            continue
+        tools.append({"name": n, "description": fn.get("description", ""), "parameters": fn.get("parameters", {})})
+    return {"tools": tools, "not_available": missing}
+
 
 class ToolPoolPlanner:
     """Plans and executes tool pools according to the protocol:
@@ -121,28 +172,24 @@ class ToolPoolPlanner:
 
 
     def _tool_catalog_block(self, tool_schemas: list[dict]) -> str:
-        """Compact machine-readable catalog used by the planner/analyst."""
-        catalog = []
-        for schema in tool_schemas:
+        """Compact catalog for the planner: name and purpose only. Parameter schemas come from describe_tools."""
+        lines = []
+        for schema in sorted(tool_schemas, key=lambda s: s.get("function", {}).get("name", "")):
             fn = schema.get("function", {})
-            catalog.append({
-                "name": fn.get("name"),
-                "description": fn.get("description", ""),
-                "parameters": fn.get("parameters", {}),
-            })
-        return json.dumps(catalog, ensure_ascii=False, indent=2)
-
+            lines.append(f"- {fn.get('name')}: {_purpose(fn.get('description', ''))}")
+        return "\n".join(lines)
 
     def _planner_messages(self, messages: list[dict], tool_schemas: list[dict], phase: str) -> list[dict]:
-        catalog = self._tool_catalog_block(tool_schemas)
         if phase == "planning":
-            instruction = (
-                load_prompt("planner_first_pass") + catalog
-            )
+            instruction = load_prompt("planner_first_pass")
         else:
-            instruction = (
-                load_prompt("planner_analysis") + catalog
-            )
+            instruction = load_prompt("planner_analysis")
+        instruction += (
+            "\n\nTOOL CATALOG (name: purpose). Parameter schemas are not shown here. "
+            "Before using a tool in plan_tool_pool, call describe_tools with its names unless its schema "
+            "already appears in this conversation. describe_tools runs no tool.\n"
+            + self._tool_catalog_block(tool_schemas)
+        )
         instruction = instruction.replace("{max_rounds}", str(self.max_tool_iterations))
         result = [dict(m) for m in messages]
         result[0] = {"role": "system", "content": (result[0].get("content") or "") + "\n\n" + instruction}

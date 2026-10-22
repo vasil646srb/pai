@@ -23,6 +23,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+from .files_extract import TranscribeError, transcribe, transcription_ready
 from .telegram_store import TelegramStore, file_links
 
 # Markdown -> Telegram HTML and message splitting (see md_to_tg_html).
@@ -62,6 +63,7 @@ POLICY_DEFAULTS = {
     "jev_reply_kinds": ["question", "request", "chat", "other"],
     "group_image_replies": True,      # a group message that is only an image goes to the persona without the Jev gate
 }
+MEDIA_KINDS = ("voice", "audio", "video", "video_note")  # speech is taken from these (animations are silent)
 GROUP_TOOL_OPTIONS = ("get_fragment", "search_archive", "calculate_time_delta",
                       "list_fragments_by_timeframe", "web_search", "web_fetch")
 JEV_KINDS = ("question", "request", "chat", "other", "spam")
@@ -94,7 +96,7 @@ class TelegramService:
         else:
             self.dir.mkdir(parents=True, exist_ok=True)
             self._lock = threading.RLock()
-            conn = sqlite3.connect(str(self.dir / "index.sqlite3"), check_same_thread=False)
+            conn = sqlite3.connect(str(self.dir / "index.sqlite3"), check_same_thread=False, timeout=30)
             conn.row_factory = sqlite3.Row
         self.store = TelegramStore(conn, self._lock)
         self.store.import_legacy(self.dir)  # JSON files of the previous version: copied once, then renamed
@@ -421,6 +423,9 @@ class TelegramService:
             self._save_analysis(it)
             return 0
         self._react(it["id"], REACT_PROCESSING)
+        media = [f for f in it.get("files") or [] if _is_media_ref(f)]
+        if media and transcription_ready():  # Jev judges the words, so the speech is taken first
+            it["transcript"], _ = self._transcribe_media(self.download_media(media), "telegram-group")
         # A message that is only an image: Jev reads text, so it cannot judge a picture. The persona sees the
         # image itself and answers with nothing when no answer is due (see make_responder).
         image_only = not (it.get("text") or "").strip() and any(_is_image_ref(f) for f in it.get("files") or [])
@@ -508,6 +513,17 @@ class TelegramService:
                     self.store.msg_update(m["id"], files=file_links(atts))  # links are kept even if the reply fails
                 prompt_atts += atts
                 pairs.append((m, atts))
+            media = [a for a in prompt_atts if _is_media_ref(a)]
+            if media:
+                media_text, media_notes = self._transcribe_media(media, "telegram-owner")
+                if media_text and not texts and self._media_action(media_text) == "note":
+                    # Jev: only a note to keep, not a command. The owner gets the text back; no brain turn.
+                    self._store_owner_media(media)
+                    self._owner_finish(batch, pairs, owner_id, f"Расшифровка:\n{media_text}")
+                    continue
+                if media_text:
+                    texts.append(media_text)
+                texts += [f"[вложение не расшифровано: {n}]" for n in media_notes]
             prompt = {"text": "\n\n".join(texts), "attachments": prompt_atts}
             if not prompt["text"] and not prompt_atts:
                 continue  # nothing to act on (sticker, service message)
@@ -525,16 +541,67 @@ class TelegramService:
             except Exception as e:
                 _log.exception("owner command failed")
                 reply = f"ошибка выполнения: {type(e).__name__}"
-            status, err = "sent", ""
-            try:
-                for part in split_text(reply, self.text_limit("owner")):
-                    self._send(str(owner_id), part, reply_to=_source_message_id(batch[0]))
-            except TelegramError as e:
-                status, err = "failed", str(e)
-            for m, atts in pairs:  # the responder has filled upload_id in each attachment
-                self.store.msg_update(m["id"], files=file_links(atts), reply_status=status, error=err)
-                self._react(m["id"], REACT_DONE if status == "sent" else None)
+            self._owner_finish(batch, pairs, owner_id, reply)
         return {"processed": len(batches), "checked": len(todo)}
+
+    def _owner_finish(self, batch: list[dict], pairs: list, owner_id: int, reply: str) -> None:
+        """Sends the reply to the owner's chat and writes the outcome into each message row."""
+        status, err = "sent", ""
+        try:
+            for part in split_text(reply, self.text_limit("owner")):
+                self._send(str(owner_id), part, reply_to=_source_message_id(batch[0]))
+        except TelegramError as e:
+            status, err = "failed", str(e)
+        for m, atts in pairs:  # the responder has filled upload_id in each attachment
+            self.store.msg_update(m["id"], files=file_links(atts), reply_status=status, error=err)
+            self._react(m["id"], REACT_DONE if status == "sent" else None)
+
+    def _transcribe_media(self, rows: list[dict], source: str) -> tuple[str, list[str]]:
+        """Speech of voice / audio / video rows. Sets row['transcript'] ('' when there is none) and returns
+        (the joined text, notes explaining what could not be recognized)."""
+        texts, notes = [], []
+        for a in rows:
+            a["transcript"] = ""
+            if a.get("data") is None:
+                notes.append(a.get("note") or "файл не получен")
+                continue
+            try:
+                t = transcribe(a["name"], a["data"], duration=a.get("duration") or None, source=source)
+            except TranscribeError as e:
+                a["note"] = str(e)
+                notes.append(str(e))
+                continue
+            a["transcript"] = t
+            if t:
+                texts.append(t)
+            else:
+                notes.append("речи не найдено")
+        return "\n".join(texts), notes
+
+    def _media_action(self, transcript: str) -> str:
+        """Jev decides what the owner's voice or video is for: 'answer' (a command, the default) or 'note'."""
+        if _media_classifier is None:
+            return "answer"
+        try:
+            return _media_classifier(transcript) or "answer"
+        except Exception:
+            _log.warning("telegram media classifier failed", exc_info=True)
+            return "answer"
+
+    def _store_owner_media(self, rows: list[dict]) -> None:
+        """Keeps the owner's media file with its transcript in the owner's space (for a 'note')."""
+        if self.storage is None:
+            return
+        space = self.policy()["owner_space"]
+        for a in rows:
+            if a.get("data") is None:
+                continue
+            try:
+                a["upload_id"] = self.storage.store_upload(
+                    a["name"], a["data"], space_id=space, any_type=True,
+                    known_text=a.get("transcript", ""))["id"]
+            except ValueError:
+                pass
 
     def download_media(self, refs: list[dict]) -> list[dict]:
         """Files of one owner message from Telegram: {name, kind, mime, data (bytes | None), note}.
@@ -542,7 +609,8 @@ class TelegramService:
         out = []
         for ref in refs:
             row = {"file_id": ref["file_id"], "name": ref["name"], "kind": ref["kind"], "mime": ref["mime"],
-                   "size": int(ref.get("size") or 0), "data": None, "note": ""}
+                   "size": int(ref.get("size") or 0), "duration": int(ref.get("duration") or 0),
+                   "data": None, "note": ""}
             if int(ref.get("size") or 0) > MAX_DOWNLOAD_BYTES:
                 row["note"] = "больше 20 МБ, Telegram не отдаёт такие файлы боту"
             else:
@@ -980,6 +1048,7 @@ _svc: TelegramService | None = None
 _poller_started = False
 _responder = None   # fn(item) -> reply text | None   (persona brain, see telegram_agent.py)
 _classifier = None  # fn(text, sender) -> {"needs_reply": bool, "kind": str} | None   (Jev)
+_media_classifier = None  # fn(transcript) -> "answer" | "note" | None   (Jev: what the owner's voice/video is for)
 _owner_responder = None  # fn(item) -> reply text | None   (brain persona runs the owner's command)
 _options_source = None   # fn() -> {"tools": [...], "spaces": [...]}
 _action_executor = None  # fn(tool, arguments) -> result dict   (runs a tool call the owner confirmed)
@@ -991,6 +1060,11 @@ ACTION_TTL = 24 * 3600  # an unconfirmed request expires after a day
 def set_responder(fn) -> None:
     global _responder
     _responder = fn
+
+
+def set_media_classifier(fn) -> None:
+    global _media_classifier
+    _media_classifier = fn
 
 
 def set_classifier(fn) -> None:
@@ -1033,9 +1107,22 @@ def _is_image_ref(f: dict) -> bool:
     return f.get("kind") == "photo" or f.get("mime") in IMAGE_MIMES
 
 
+def _is_media_ref(f: dict) -> bool:
+    """A voice note, audio, or video (also a document that is audio or video by its mime type)."""
+    return f.get("kind") in MEDIA_KINDS or str(f.get("mime") or "").startswith(("audio/", "video/"))
+
+
+def group_body(it: dict) -> str:
+    """What Jev and the persona read of a group message: its caption and the speech of its voice or video."""
+    parts = [(it.get("text") or "").strip()]
+    if (it.get("transcript") or "").strip():
+        parts.append(f"[Расшифровка голосового или видео]: {it['transcript'].strip()}")
+    return "\n".join(p for p in parts if p)
+
+
 def _group_input_text(it: dict) -> str:
     """What Jev and the persona see of a group message: its text, or a note when the message is only a file."""
-    text = (it.get("text") or "").strip()
+    text = group_body(it)
     if text:
         return text
     kinds = [k for k in (it.get("kinds") or []) if k != "rich_message"]
@@ -1123,7 +1210,8 @@ def _direct_media(msg: dict) -> list[dict]:
             continue
         refs.append({"file_id": obj["file_id"], "kind": key,
                      "name": obj.get("file_name") or default_name or f"{key}_{obj.get('file_unique_id', '')}",
-                     "mime": obj.get("mime_type") or default_mime, "size": obj.get("file_size") or 0})
+                     "mime": obj.get("mime_type") or default_mime, "size": obj.get("file_size") or 0,
+                     "duration": obj.get("duration") or 0})
     return refs
 
 

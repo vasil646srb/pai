@@ -43,8 +43,10 @@ class FilesMixin:
     def _file_path(self, sha: str, codec: str) -> Path:
         return self.data_dir / "files" / sha[:2] / f"{sha}{_EXT.get(codec, '.bin')}"
 
-    def store_upload(self, name: str, data: bytes, space_id: str = "personal", any_type: bool = False) -> dict:
-        """any_type: keep files of any type (Telegram attachments). Text is extracted only where it is readable."""
+    def store_upload(self, name: str, data: bytes, space_id: str = "personal", any_type: bool = False,
+                     known_text: str | None = None) -> dict:
+        """any_type: keep files of any type (Telegram attachments). Text is extracted only where it is readable.
+        known_text: text already obtained for this file (a transcript), so it is not recognized a second time."""
         name = clean_name(name)
         ext = os.path.splitext(name)[1].lower()
         if not any_type and ext not in ALLOWED_EXTS:
@@ -61,7 +63,11 @@ class FilesMixin:
             return self.file_meta(row[0])
 
         mime = guess_mime(name)
-        text, note = extract_text(name, data)  # CPU work, outside the lock
+        if known_text is not None:
+            text = known_text.strip() or None
+            note = "" if text else "no text found"
+        else:
+            text, note = extract_text(name, data)  # CPU work, outside the lock
         blob, codec = _compress(data, mime)
         path = self._file_path(sha, codec)
         path.parent.mkdir(parents=True, exist_ok=True)

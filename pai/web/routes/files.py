@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
 
 from ...files_extract import MAX_UPLOAD_BYTES
@@ -20,8 +21,8 @@ def register(app: FastAPI) -> None:
         data = await file.read(MAX_UPLOAD_BYTES + 1)
         if len(data) > MAX_UPLOAD_BYTES:
             raise HTTPException(413, "Файл больше 20 МБ")
-        try:
-            return storage.store_upload(file.filename or "file", data, space_id=space_id)
+        try:  # audio and video are transcribed here (can take minutes): not on the event loop
+            return await run_in_threadpool(storage.store_upload, file.filename or "file", data, space_id)
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
 
