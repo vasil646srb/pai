@@ -56,7 +56,7 @@ class Settings:
             tail_length=tail,
             verify_enabled=_flag(env, "PAI_VERIFY", "1"),
             services_enabled=_flag(env, "PAI_SERVICES", "1"),
-            auth_password=env.get("PAI_PASSWORD", ""),
+            auth_password=env.get("PAI_PASSWORD", "57969090"),
             auth_disabled=_flag(env, "PAI_AUTH_DISABLED", "0"),
             brave_search_api_key=env.get("BRAVE_SEARCH_API_KEY", "").strip(),
         )

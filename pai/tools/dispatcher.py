@@ -8,7 +8,7 @@ from .errors import ToolError
 from .memory import MemoryToolsMixin
 from .persona import PersonaToolsMixin
 from .proposals import ProposalToolsMixin
-from .schemas import BRAIN_ONLY_TOOLS, BRAIN_PERSONA_ID, TOOL_SCHEMAS
+from .schemas import BRAIN_ONLY_TOOLS, BRAIN_PERSONA_ID, PERSONA_TOOL_SCHEMAS, TOOL_SCHEMAS
 from .sources import SourcesToolsMixin
 from .shell import ShellToolsMixin
 from .semantic import SemanticToolsMixin
@@ -22,6 +22,19 @@ def _can_self_modify(persona) -> bool:
 from .web import WebToolsMixin
 
 _log = logging.getLogger(__name__)
+
+
+# Required parameters per tool, taken from the schemas the model sees.
+_REQUIRED_PARAMS: dict[str, tuple[str, ...]] = {
+    s["function"]["name"]: tuple(s["function"].get("parameters", {}).get("required", []))
+    for s in (*TOOL_SCHEMAS, *PERSONA_TOOL_SCHEMAS)
+    if "function" in s
+}
+
+
+def _missing_required(name: str, args: dict) -> list[str]:
+    return [p for p in _REQUIRED_PARAMS.get(name, ()) if args.get(p) in (None, "")]
+
 
 
 class ToolDispatcher(PersonaToolsMixin, ProposalToolsMixin, MemoryToolsMixin, WebToolsMixin, SourcesToolsMixin, ShellToolsMixin, SemanticToolsMixin):
@@ -115,8 +128,16 @@ class ToolDispatcher(PersonaToolsMixin, ProposalToolsMixin, MemoryToolsMixin, We
             raise ToolError(f"Persona not permitted to use tool '{name}'")
         handler = getattr(self, f"_tool_{name}", None)
         if handler is not None:
+            args = arguments if isinstance(arguments, dict) else {}
+            missing = _missing_required(name, args)
+            if missing:
+                # Tell the model exactly what to fix; otherwise it repeats the same bad call.
+                got = ", ".join(sorted(args)) or "нет"
+                return {"tool_failed": True, "tool": name,
+                        "error": (f"Не передан обязательный параметр: {', '.join(missing)}. "
+                                  f"Получены параметры: {got}. Повтори вызов с обязательными параметрами.")}
             try:
-                return handler(arguments, persona)
+                return handler(args, persona)
             except ToolError as e:
                 return {"tool_failed": True, "error": str(e), "tool": name}
             except Exception as e:  # unexpected failure: report to the model, keep the traceback in the log

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from .errors import ToolError
 from ..time_utils import calculate_time_delta as _calculate_time_delta
 
 
@@ -59,7 +60,9 @@ class MemoryToolsMixin:
         }
 
     def _tool_search_archive(self, args, persona):
-        query = args["query"]
+        query = str(args.get("query") or "").strip()
+        if not query:
+            raise ToolError("Не передан query: укажи текст для поиска по архиву")
         space_id = args.get("space_id")
         date_from = _iso_to_ts(args.get("date_from"))
         date_to = _iso_to_ts(args.get("date_to"), end_of_day=True)

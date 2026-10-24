@@ -135,6 +135,16 @@ def make_responder(orch, personas, space_id: str = GROUP_SPACE, persona_id: str 
 
 
 
+
+def _looks_like_config_ask(t: str) -> bool:
+    low = t.lower()
+    triggers = (
+        "инструкци", "конфигураци", "system prompt", "системный промпт",
+        "настройки", "поделиться инструкци", "твой промпт", "покажи промпт",
+        "reveal", "share your instruction", "share your configuration",
+    )
+    return any(x in low for x in triggers)
+
 def make_owner_responder(orch):
     """The owner's private message is a normal user turn of the brain persona in the owner's chosen space.
     Its tools are the brain's own (shell, http, memory). The answer goes back to the owner's chat.
@@ -165,6 +175,8 @@ def make_owner_responder(orch):
             return None
         if not text:
             text = "Посмотри вложение и скажи, что в нём."
+        if _looks_like_config_ask(text):
+            return "Показать системные инструкции, промпт или конфигурацию нельзя — это внутренние данные. Скажите, что нужно сделать, и я выполню."
         reply = ""
         for ev in orch.handle_turn_stream(text, persona_id=BRAIN_PERSONA_ID, space_id=space,
                                           images=images or None, file_ids=file_ids or None):

@@ -545,7 +545,11 @@ class TelegramService:
                 reply = _owner_responder(prompt) or "(готово, текстового ответа нет)"
             except Exception as e:
                 _log.exception("owner command failed")
-                reply = f"ошибка выполнения: {type(e).__name__}"
+                err = str(e)
+                if "content_policy" in err or "403" in err or "share my instructions" in err:
+                    reply = "(Команда заблокирована провайдером как запрос системных инструкций/конфигурации. Переформулируйте вопрос через действие — «выполни…», и не просите показать промпт/настройки.)"
+                else:
+                    reply = f"ошибка выполнения: {type(e).__name__}: {err[:200]}"
             self._owner_finish(batch, pairs, owner_id, reply)
         return {"processed": len(batches), "checked": len(todo)}
 

@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
-import base64
 import html
 import ipaddress
 import json
 import re
 import socket
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
-import requests
+from curl_cffi import requests as curl_requests
 from bs4 import BeautifulSoup
+from bs4 import XMLParsedAsHTMLWarning
+import warnings
+
+warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
 from .errors import ToolError
 from .schemas import BRAIN_PERSONA_ID
@@ -39,24 +41,15 @@ def _ddg_unwrap(url):
 
 
 def _http_session():
-    """Transport for http_request / web_fetch: curl_cffi with a Chrome TLS fingerprint.
-
-    impersonate="chrome" already sets a consistent User-Agent + sec-ch-ua pair, so the UA is
-    not overridden by hand (a hand-written UA would contradict the Client Hints headers).
-    requests is used only when curl_cffi is not installed."""
-    if cffi_requests is None:
-        session = requests.Session()
-        session.headers.update(
-            {
-                "User-Agent": (
-                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36"
-                ),
-                "Accept-Language": "en-US,en;q=0.8",
-            }
-        )
-        return session
-    session = cffi_requests.Session(impersonate="chrome")
-    session.headers.update({"Accept-Language": "en-US,en;q=0.8"})
+    session = curl_requests.Session(impersonate="chrome110")
+    session.headers.update(
+        {
+            "User-Agent": (
+                "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Mobile Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.8",
+        }
+    )
     return session
 
 
@@ -67,35 +60,11 @@ def _bs4_text(node):
     return "\n".join(line.strip() for line in node.get_text("\n", strip=True).splitlines() if line.strip())
 
 
-# ── транспорт поиска: curl_cffi ───────────────────────────────────────────────
-# Termux: готовое колесо curl_cffi-0.16.3-...-android_24_arm64_v8a.whl, сборка не нужна.
-try:
-    from curl_cffi import requests as cffi_requests
-except ImportError:  # мягкий фолбэк: модуль импортируется, ошибка — только при вызове web_search
-    cffi_requests = None
-
-_NET_ERRORS: tuple = (OSError,)
-try:  # у curl_cffi свой базовый класс ошибок
-    from curl_cffi.requests.errors import RequestsError as _CffiError
-
-    _NET_ERRORS = (_CffiError, OSError)
-except Exception:  # pragma: no cover - зависит от версии curl_cffi
-    pass
-# requests остаётся только как аварийный фолбэк транспорта, но его ошибки тоже ловим
-_NET_ERRORS = _NET_ERRORS + (requests.RequestException,)
-
 _DDG_HTML = "https://html.duckduckgo.com/html/"
 _DDG_LITE = "https://lite.duckduckgo.com/lite/"
-_BING = "https://www.bing.com/search"
-_MWMBL = "https://api.mwmbl.org/api/v1/search/"
-# «captcha» убран из маркеров: ложно срабатывал на запросах вида "captcha bypass"
-_BLOCK_MARKERS = (
-    "anomaly-modal",
-    "unfortunately, bots use duckduckgo",
-    "g-recaptcha",
-    "are you not a robot",
-    "verifying your browser",
-)
+_BING_RSS_URL = "https://www.bing.com/news/search?q={}&format=rss"
+_GOOGLE_RSS_URL = "https://news.google.com/rss/search?q={}&hl=en&gl=US&ceid=US:en"
+_BLOCK_MARKERS = ("anomaly-modal", "unfortunately, bots use duckduckgo", "g-recaptcha", "captcha")
 
 
 def _is_blocked(status: int, text: str) -> bool:
@@ -103,43 +72,6 @@ def _is_blocked(status: int, text: str) -> bool:
         return True
     low = (text or "")[:30000].lower()
     return any(m in low for m in _BLOCK_MARKERS)
-
-
-def _session(impersonate=None):
-    """curl_cffi-сессия. impersonate включается точечно: DDG с 'chrome' отдаёт 202,
-    без него — 200 и 10 результатов (проверено с этого телефона)."""
-    if cffi_requests is None:
-        raise ToolError("web_search: curl_cffi не установлен (pip install curl_cffi)")
-    session = cffi_requests.Session(impersonate=impersonate) if impersonate else cffi_requests.Session()
-    session.headers.update(
-        {
-            "User-Agent": (
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36"
-            ),
-            "Accept-Language": "en-US,en;q=0.8",
-        }
-    )
-    return session
-
-
-def _region_for(query: str):
-    """Кириллица в запросе → ru, иначе en. Раньше kl был захардкожен 'wt-wt'."""
-    if re.search(r"[а-яёА-ЯЁ]", query):
-        return "ru-ru", "ru-RU,ru;q=0.9,en;q=0.8"
-    return "wt-wt", "en-US,en;q=0.8"
-
-
-def _bing_unwrap(url: str) -> str:
-    """bing.com/ck/a?...&u=a1<base64url> → реальный URL (иначе все ссылки — редиректы)."""
-    if "bing.com/ck/a" not in url:
-        return url
-    u = (urllib.parse.parse_qs(urllib.parse.urlparse(url).query).get("u") or [""])[0]
-    if u.startswith("a1"):
-        u = u[2:]
-    try:
-        return urllib.parse.unquote(base64.urlsafe_b64decode(u + "=" * (-len(u) % 4)).decode("utf-8", "replace"))
-    except Exception:
-        return url
 
 
 def _parse_ddg_html(text: str) -> list[dict]:
@@ -151,97 +83,69 @@ def _parse_ddg_html(text: str) -> list[dict]:
         if link is None:
             continue
         snip = block.select_one(".result__snippet")
-        out.append(
-            {
-                "title": link.get_text(" ", strip=True),
-                "href": link.get("href", ""),
-                "snippet": snip.get_text(" ", strip=True) if snip else "",
-            }
-        )
-    return out
-
-
-def _parse_bing_html(text: str) -> list[dict]:
-    """Markup of www.bing.com/search: li.b_algo → h2 a + .b_caption p."""
-    soup = BeautifulSoup(text, "html.parser")
-    out = []
-    for li in soup.select("li.b_algo"):
-        link = li.select_one("h2 a")
-        if link is None:
-            continue
-        p = li.select_one(".b_caption p") or li.select_one("p")
-        out.append(
-            {
-                "title": link.get_text(" ", strip=True),
-                "href": link.get("href", ""),
-                "snippet": p.get_text(" ", strip=True) if p else "",
-            }
-        )
+        out.append({"title": link.get_text(" ", strip=True), "href": link.get("href", ""),
+                    "snippet": snip.get_text(" ", strip=True) if snip else ""})
     return out
 
 
 def _parse_ddg_lite(text: str) -> list[dict]:
-    """Markup of lite.duckduckgo.com: a.result-link in a row, snippet in the same or next row.
-    Терпимый парсер: фолбэк-селектор td a[href^=http] на случай смены вёрстки."""
+    """Markup of lite.duckduckgo.com: a.result-link in a row, snippet in the next row's .result-snippet."""
     soup = BeautifulSoup(text, "html.parser")
     out = []
-    links = soup.select("a.result-link") or soup.select("td a[href^=http]")
-    for link in links:
+    for link in soup.select("a.result-link"):
         snippet = ""
         row = link.find_parent("tr")
-        if row is not None:
-            sn = row.select_one(".result-snippet")
-            if sn is None:
-                nxt = row.find_next_sibling("tr")
-                if nxt is not None:
-                    sn = nxt.select_one(".result-snippet")
-            if sn is not None:
-                snippet = sn.get_text(" ", strip=True)
+        nxt = row.find_next_sibling("tr") if row is not None else None
+        if nxt is not None:
+            sn = nxt.select_one(".result-snippet")
+            snippet = sn.get_text(" ", strip=True) if sn else ""
         out.append({"title": link.get_text(" ", strip=True), "href": link.get("href", ""), "snippet": snippet})
     return out
 
-
-def _mwmbl_text(value) -> str:
-    """Mwmbl отдаёт title/extract как список фрагментов [{"value": ..., "is_bold": bool}],
-    а не строку. Собираем фрагменты в одну строку, иначе .strip() в _normalize_hits падает."""
-    if isinstance(value, str):
-        return value.strip()
-    if isinstance(value, list):
-        parts = []
-        for chunk in value:
-            if isinstance(chunk, str):
-                parts.append(chunk)
-            elif isinstance(chunk, dict):
-                parts.append(str(chunk.get("value") or ""))
-        return "".join(parts).strip()
-    if isinstance(value, dict):
-        return str(value.get("value") or "").strip()
-    return "" if value is None else str(value).strip()
-
-
-def _parse_mwmbl(payload) -> list[dict]:
-    """api.mwmbl.org → JSON, без ключа. Индекс маленький: на узких запросах часто пусто."""
-    items = payload.get("results") if isinstance(payload, dict) else payload
-    out = []
-    for it in items or []:
-        if not isinstance(it, dict):
-            continue
-        out.append(
-            {
-                "title": _mwmbl_text(it.get("title")),
-                "href": _mwmbl_text(it.get("url")),
-                "snippet": _mwmbl_text(it.get("extract")) or _mwmbl_text(it.get("description")),
-            }
-        )
-    return out
+def _parse_rss_feed(text: str) -> list[dict]:
+    """Parse RSS/Atom feed XML into normalized hits."""
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        return []
+    # RSS 2.0
+    items = root.findall(".//item")
+    if not items:
+        # Atom
+        items = root.findall(".//{http://www.w3.org/2005/Atom}entry")
+        if items:
+            results = []
+            for it in items:
+                title_el = it.find("title") or it.find("{http://www.w3.org/2005/Atom}title")
+                link_el = it.find("link") or it.find("{http://www.w3.org/2005/Atom}link")
+                desc_el = it.find("description") or it.find("{http://purl.org/dc/elements/1.1/}description")
+                title = (title_el.text or "").strip() if title_el is not None else ""
+                href = link_el.get("href", "") if link_el is not None else ""
+                if not href and link_el is not None:
+                    href = link_el.text or ""
+                snippet = (desc_el.text or "").strip() if desc_el is not None else ""
+                if title and href.startswith(("http://", "https://")):
+                    results.append({"title": title, "url": href, "snippet": snippet[:300]})
+            return results
+        return []
+    results = []
+    for it in items:
+        title_el = it.find("title")
+        link_el = it.find("link")
+        desc_el = it.find("description") or it.find("{http://purl.org/dc/elements/1.1/}description")
+        title = (title_el.text or "").strip() if title_el is not None else ""
+        href = (link_el.text or "").strip() if link_el is not None else ""
+        snippet = (desc_el.text or "").strip() if desc_el is not None else ""
+        if title and href.startswith(("http://", "https://")):
+            results.append({"title": title, "url": href, "snippet": snippet[:300]})
+    return results
 
 
 def _normalize_hits(raw: list[dict], limit: int) -> list[dict]:
     results, seen = [], set()
     for r in raw:
         href = _ddg_unwrap(r.get("href", "") or "")
-        if "bing.com" in href:
-            href = _bing_unwrap(href)
         title = (r.get("title") or "").strip()
         if not title or not href.startswith(("http://", "https://")) or href in seen:
             continue
@@ -265,6 +169,7 @@ def configure_web_search(brave_api_key: str = "") -> None:
 
 def _brave_search(query, limit, timeout, session):
     """Official Brave Search API. Returns hits, raises ToolError on any failure."""
+    resp = None
     try:
         resp = session.get(
             _BRAVE_URL,
@@ -272,105 +177,69 @@ def _brave_search(query, limit, timeout, session):
             headers={"Accept": "application/json", "X-Subscription-Token": _BRAVE_KEY},
             timeout=timeout,
         )
-    except _NET_ERRORS as e:
+    except curl_requests.RequestsError as e:
         raise ToolError(f"brave: сеть ({type(e).__name__})") from e
+    finally:
+        if resp is not None:
+            resp.close()
     if resp.status_code != 200:
         raise ToolError(f"brave: HTTP {resp.status_code}")
     try:
         items = (resp.json().get("web") or {}).get("results") or []
     except ValueError as e:
         raise ToolError("brave: некорректный JSON") from e
-    raw = [
-        {"title": it.get("title", ""), "href": it.get("url", ""), "snippet": it.get("description", "")}
-        for it in items
-    ]
+    raw = [{"title": it.get("title", ""), "href": it.get("url", ""),
+            "snippet": it.get("description", "")} for it in items]
     return _normalize_hits(raw, limit)
 
 
-def web_search(query, limit=5, timeout=8.0, total_timeout=20.0):
-    """Search the web: Brave API (when a key is set) → DDG html → Bing html → DDG Lite → Mwmbl.
+def web_search(query, limit=5, timeout=8.0):
+    """Search the web. Brave API first when a key is configured, then DuckDuckGo html, then lite.
 
-    Every request gets min(timeout, remaining of total_timeout), so the worst case is bounded
-    by total_timeout instead of the sum of per-provider timeouts.
     Returns a list (possibly empty when a provider answered and had no hits).
     Raises ToolError only when no provider gave a usable answer, with the reason of each."""
     query = (query or "").strip()
     if not query:
         raise ToolError("web_search: пустой запрос")
-    try:  # None/строка больше не дают TypeError
-        limit = max(1, min(int(limit), 10))
-    except (TypeError, ValueError):
-        limit = 5
-
-    kl, accept_lang = _region_for(query)
-    deadline = time.monotonic() + float(total_timeout)
-
-    def left() -> float:
-        return max(1.0, min(timeout, deadline - time.monotonic()))
-
+    limit = max(1, min(int(limit), 10))
+    session = _http_session()
     problems, answered = [], False
-    if _BRAVE_KEY:  # 1. официальный API — только при ключе
-        session = _session()
+    if _BRAVE_KEY:
         try:
-            results = _brave_search(query, limit, left(), session)
+            results = _brave_search(query, limit, timeout, session)
             if results:
                 return results
             problems.append("brave: пустая выдача")
             answered = True
         except ToolError as e:
             problems.append(str(e))
-        finally:
-            session.close()
-
-    chain = (  # (имя, метод, url, параметры, impersonate, парсер, это_json)
-        ("ddg-html", "POST", _DDG_HTML, {"q": query, "kl": kl}, None, _parse_ddg_html, False),
-        ("ddg-lite", "POST", _DDG_LITE, {"q": query, "kl": kl}, None, _parse_ddg_lite, False),
-        ("mwmbl", "GET", _MWMBL, {"s": query}, None, _parse_mwmbl, True),
-        # bing: последним. С мобильного IP отдаёт нерелевантную выдачу (гео-локаль),
-        # mkt=en-US и cc=us возвращают 0 результатов, ensearch=1 — мусор. Оставляем фолбэком.
-        (
-            "bing",
-            "GET",
-            _BING,
-            {"q": query, "count": limit, "mkt": "ru-RU" if kl == "ru-ru" else "en-US"},
-            "chrome",
-            _parse_bing_html,
-            False,
-        ),
+    backends = (
+        ("html", _DDG_HTML, _parse_ddg_html, "POST"),
+        ("lite", _DDG_LITE, _parse_ddg_lite, "POST"),
+        ("bing_rss", _BING_RSS_URL, _parse_rss_feed, "GET"),
+        ("google_rss", _GOOGLE_RSS_URL, _parse_rss_feed, "GET"),
     )
-    for name, method, url, params, imp, parser, is_json in chain:
-        session = _session(imp)
+    for name, url, parser, method in backends:
         try:
-            if method == "POST":
-                resp = session.post(
-                    url,
-                    data=params,
-                    timeout=left(),
-                    headers={"Referer": "https://duckduckgo.com/", "Accept-Language": accept_lang},
-                )
+            if method == "GET":
+                resp = session.get(url.format(query), timeout=timeout,
+                                    headers={"Referer": "https://duckduckgo.com/"})
             else:
-                resp = session.get(url, params=params, timeout=left(), headers={"Accept-Language": accept_lang})
-            status, text = resp.status_code, resp.text
-        except _NET_ERRORS as e:  # сеть/таймаут — просто идём дальше
+                resp = session.post(url, data={"q": query, "kl": "wt-wt"}, timeout=timeout,
+                                    headers={"Referer": "https://duckduckgo.com/"})
+        except curl_requests.RequestsError as e:
             problems.append(f"{name}: сеть ({type(e).__name__})")
             continue
-        finally:
-            session.close()
-        if _is_blocked(status, text):
-            problems.append(f"{name}: HTTP {status}, блокировка или капча")
+        if _is_blocked(resp.status_code, resp.text):
+            problems.append(f"{name}: HTTP {resp.status_code}, блокировка или капча")
             continue
-        if status != 200:
-            problems.append(f"{name}: HTTP {status}")
+        if resp.status_code != 200:
+            problems.append(f"{name}: HTTP {resp.status_code}")
             continue
-        try:
-            raw = parser(json.loads(text) if is_json else text)
-        except Exception as e:  # битая вёрстка или JSON не роняют каскад
-            problems.append(f"{name}: разбор ({type(e).__name__})")
-            continue
-        answered = True  # провайдер ответил — «пусто» это валидный итог
-        hits = _normalize_hits(raw, limit)
-        if hits:
-            return hits
+        answered = True
+        results = _normalize_hits(parser(resp.text), limit)
+        if results:
+            return results
         problems.append(f"{name}: пустая выдача")
     if answered:
         return []
@@ -432,7 +301,12 @@ def _tool_http_request_impl(args, brain: bool = False):
 
     timeout = max(1, min(float(args.get("timeout", 20)), 120))
     max_chars = max(1, min(int(args.get("max_chars", 200_000)), 1_000_000))
-    headers = {str(k): fill(str(v)) for k, v in (args.get("headers") or {}).items()}
+    raw_headers = args.get("headers") or {}
+    if isinstance(raw_headers, str):
+        raw_headers = json.loads(fill(raw_headers))
+    if not isinstance(raw_headers, dict):
+        raise ToolError("headers must be a JSON object")
+    headers = {str(k): fill(str(v)) for k, v in raw_headers.items()}
     params = fill(args.get("params") or {})
     json_body = fill(args.get("json", None))
     raw_body = fill(args.get("body", None))
@@ -445,7 +319,7 @@ def _tool_http_request_impl(args, brain: bool = False):
             headers=headers, params=params, json=json_body, data=raw_body, timeout=timeout,
             allow_private=brain, session=_brain_session() if brain else None,
         )
-    except _NET_ERRORS as e:
+    except curl_requests.RequestsError as e:
         raise ToolError(redact(f"http_request network error: {e}")) from e
 
     body = redact(response.text)
@@ -481,7 +355,9 @@ _META_CHARSET_RE = re.compile(rb'<meta[^>]+charset=["\']?([\w-]+)', re.IGNORECAS
 
 def _html_to_text(body: str) -> str:
     """HTML -> readable text via BeautifulSoup (scripts/styles removed)."""
-    return _bs4_text(BeautifulSoup(body, "html.parser"))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", XMLParsedAsHTMLWarning)
+        return _bs4_text(BeautifulSoup(body, "html.parser"))
 
 
 def _normalize_url(url: str) -> str:
@@ -584,8 +460,9 @@ def fetch_url(url, mode="text", timeout=10.0, max_chars=8000):
         raise ToolError(f"web_fetch invalid URL: {url!r}")
     request_url = _normalize_url(url)
 
-    resp = _get_checked(_http_session(), request_url, timeout=timeout)
-    try:  # curl_cffi Response не поддерживает with, поэтому закрываем вручную
+    resp = None
+    try:
+        resp = _get_checked(_http_session(), request_url, timeout=timeout)
         resp.raise_for_status()
         content_type = resp.headers.get("Content-Type", "")
         ct = content_type.lower()
@@ -599,10 +476,11 @@ def fetch_url(url, mode="text", timeout=10.0, max_chars=8000):
                 break
         raw = b"".join(chunks)[:_MAX_FETCH_BYTES]
         status, final_url = resp.status_code, resp.url
-    except _NET_ERRORS as e:
+    except curl_requests.RequestsError as e:
         raise ToolError(f"web_fetch network error: {e}") from e
     finally:
-        resp.close()
+        if resp is not None:
+            resp.close()
 
     body = _decode_body(raw, content_type)
     is_html = "html" in ct or "xml" in ct or (not ct and body.lstrip()[:1] == "<")
